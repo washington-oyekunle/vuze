@@ -1,24 +1,26 @@
 # VUZE — Creator Platform
 
-A responsive product prototype for a creator campaign marketplace and trust-first UGC workflow.
+A responsive creator campaign marketplace and trust-first workflow prototype.
 
 ## Included screens
 
-- Public landing page with campaign previews, product positioning, and creator education links
-- Searchable/filterable campaign marketplace and individual brief pages
-- Creator workspace with overview, illustrative earnings, clip history, browser-only demo submissions, and a profile verification preview
-- Trust review console with anomaly examples, reviewer controls, and creator-facing reason/appeal principles
-- Searchable learning hub with short article previews
+- Public landing page with VUZE product positioning and launch-safe opportunity states
+- Campaign marketplace and detail routes that remain empty until real campaign terms are published
+- Creator workspace with empty states for campaigns, submissions, leaderboard, earnings, and social-account linking
+- Trust-review console that shows no cases until moderation records are connected
+- Creator resource library that remains empty until approved guidance is published
 
-## Prototype status
+## Data and integration status
 
-This repository is a **front-end product prototype**, not a production payment or view-tracking system. The campaign, creator, analytics, and moderation records are sample data. New clip submissions and social connection toggles are stored only in the current browser's local storage. No social platform APIs, account-ownership checks, automated view tracking, reviewer notifications, payout processor, wallet signing, or real funds are connected. Do not use the preview data as campaign terms or payment commitments.
+No campaign, creator, clip, leaderboard, moderation, earnings, or resource seed records are included. The app clears the legacy `vuze-demo-submissions` and `vuze-demo-socials` browser storage keys on startup and does not recreate them. Other browser storage is left untouched.
 
-The scaffold includes managed authentication/database infrastructure, but the present UI uses a demo workspace and does not yet wire that infrastructure to Discord OAuth or live product records. Production launch requires selecting and configuring the authorized identity provider, social platform access, data-retention and review policy, payout provider, and operational secrets.
+This is a front-end prototype, not a production view-tracking, moderation, or payment system. Social-account ownership checks, automated view tracking, reviewer actions, payout processing, and connected campaign records are not configured. Do not treat the absence of displayed records as an account balance or campaign offer.
+
+The scaffold includes managed authentication and database infrastructure, but the current creator views are not yet connected to live product records. Production launch requires an authorized identity and social-platform integration, a documented data-retention/review policy, a payout provider, and operational secrets.
 
 ## Development
 
-This project uses the Manus WebDev scaffold (React, TypeScript, Tailwind CSS, Express/tRPC, Drizzle/MySQL, and managed OAuth). Start the development server and run checks with:
+This project uses the Manus WebDev scaffold (React, TypeScript, Tailwind CSS, Express/tRPC, Drizzle/MySQL, and managed OAuth). Run:
 
 ```bash
 pnpm dev

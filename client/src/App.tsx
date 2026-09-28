@@ -1,5 +1,7 @@
+import { useEffect } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { clearDemoBrowserData } from "@/lib/clear-demo-browser-data";
 import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -31,6 +33,14 @@ function Router() {
 }
 
 export default function App() {
+  useEffect(() => {
+    try {
+      clearDemoBrowserData(window.localStorage);
+    } catch {
+      // Browser storage may be blocked; the application should still render.
+    }
+  }, []);
+
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="light">

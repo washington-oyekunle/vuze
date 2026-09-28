@@ -1,48 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { campaigns, moderationItems, monthlyLeaderboard, sampleClips, weeklyLeaderboard } from "../client/src/lib/vuze-data";
+import { clearDemoBrowserData, DEMO_BROWSER_KEYS } from "../client/src/lib/clear-demo-browser-data";
+import { campaigns, clips, monthlyLeaderboard, moderationItems, resources, weeklyLeaderboard } from "../client/src/lib/vuze-data";
 
-describe("VUZE prototype sample data", () => {
-  it("contains unique campaign identifiers and valid illustrative budget terms", () => {
-    const ids = campaigns.map((campaign) => campaign.id);
-    expect(new Set(ids).size).toBe(ids.length);
-    for (const campaign of campaigns) {
-      expect(campaign.rate).toBeGreaterThan(0);
-      expect(campaign.minViews).toBeGreaterThan(0);
-      expect(campaign.maxPayout).toBeGreaterThan(0);
-      expect(campaign.remaining).toBeGreaterThanOrEqual(0);
-      expect(campaign.remaining).toBeLessThanOrEqual(campaign.budget);
-      expect(campaign.platforms.length).toBeGreaterThan(0);
-    }
+describe("VUZE launch data state", () => {
+  it("contains no hard-coded campaign, creator, clip, moderation, or resource records", () => {
+    expect(campaigns).toEqual([]);
+    expect(clips).toEqual([]);
+    expect(monthlyLeaderboard).toEqual([]);
+    expect(moderationItems).toEqual([]);
+    expect(resources).toEqual([]);
+    expect(weeklyLeaderboard).toEqual([]);
   });
 
-  it("includes an explicit reviewer explanation and non-conclusive signal level per queue item", () => {
-    expect(moderationItems.length).toBeGreaterThan(0);
-    for (const item of moderationItems) {
-      expect(item.detail.trim().length).toBeGreaterThan(20);
-      expect(["high", "medium", "low"]).toContain(item.riskLevel);
-      expect(item.views).toBeGreaterThanOrEqual(0);
-    }
-  });
-
-  it("keeps weekly and monthly creator rankings distinct, unique, and ordered by sample earnings", () => {
-    expect(weeklyLeaderboard[0]?.handle).not.toBe(monthlyLeaderboard[0]?.handle);
-    for (const rows of [weeklyLeaderboard, monthlyLeaderboard]) {
-      const handles = rows.map((creator) => creator.handle);
-      expect(new Set(handles).size).toBe(handles.length);
-      for (let index = 0; index < rows.length; index += 1) {
-        expect(rows[index]?.earned).toBeGreaterThanOrEqual(0);
-        expect(rows[index]?.views).toBeGreaterThanOrEqual(0);
-        expect(rows[index]?.clips).toBeGreaterThanOrEqual(0);
-        if (index < rows.length - 1) expect(rows[index]?.earned).toBeGreaterThanOrEqual(rows[index + 1]?.earned ?? 0);
-      }
-    }
-  });
-
-  it("uses only the declared clip workflow states and non-negative sample values", () => {
-    for (const clip of sampleClips) {
-      expect(["Approved", "Tracking", "Under review", "Rejected"]).toContain(clip.status);
-      expect(clip.views).toBeGreaterThanOrEqual(0);
-      expect(clip.earned).toBeGreaterThanOrEqual(0);
-    }
+  it("clears both browser-local demo keys while leaving unrelated storage untouched", () => {
+    const values = new Map<string, string>([
+      ["vuze-demo-submissions", "old submission"],
+      ["vuze-demo-socials", "old toggle"],
+      ["other-app-setting", "keep this"],
+    ]);
+    clearDemoBrowserData({ removeItem: (key) => { values.delete(key); } });
+    expect(DEMO_BROWSER_KEYS).toEqual(["vuze-demo-submissions", "vuze-demo-socials"]);
+    expect(values.has("vuze-demo-submissions")).toBe(false);
+    expect(values.has("vuze-demo-socials")).toBe(false);
+    expect(values.get("other-app-setting")).toBe("keep this");
   });
 });
