@@ -18,6 +18,7 @@ function Router() {
       <Route path="/campaigns" component={Campaigns} />
       <Route path="/campaigns/:id" component={CampaignDetail} />
       <Route path="/dashboard" component={CreatorDashboard} />
+      <Route path="/leaderboard" component={CreatorDashboard} />
       <Route path="/clips" component={CreatorDashboard} />
       <Route path="/earnings" component={CreatorDashboard} />
       <Route path="/profile" component={CreatorDashboard} />

@@ -43,6 +43,25 @@ export const sampleClips: Clip[] = [
   { id: "VZ-2031", campaign: "Solstice", platform: "YouTube", views: 12700, earned: 69.85, status: "Under review", submitted: "Sep 27" },
 ];
 
+export type LeaderboardCreator = { handle: string; name: string; earned: number; views: number; clips: number };
+
+// Fictional creator standings for the dashboard preview only.
+export const weeklyLeaderboard: LeaderboardCreator[] = [
+  { handle: "@midas_x", name: "Midas", earned: 1240.8, views: 286400, clips: 14 },
+  { handle: "@pixelpilot", name: "Pixel Pilot", earned: 980.25, views: 201800, clips: 11 },
+  { handle: "@mariomakes", name: "Mario Makes", earned: 742.5, views: 168200, clips: 9 },
+  { handle: "@chaincoffee", name: "Chain Coffee", earned: 618.4, views: 143600, clips: 8 },
+  { handle: "@alexmakes", name: "Alex Morgan", earned: 426.8, views: 102300, clips: 7 },
+];
+
+export const monthlyLeaderboard: LeaderboardCreator[] = [
+  { handle: "@pixelpilot", name: "Pixel Pilot", earned: 4980.5, views: 1146200, clips: 58 },
+  { handle: "@midas_x", name: "Midas", earned: 4620.8, views: 1024800, clips: 52 },
+  { handle: "@chaincoffee", name: "Chain Coffee", earned: 3318.4, views: 836500, clips: 43 },
+  { handle: "@mariomakes", name: "Mario Makes", earned: 2892.5, views: 768200, clips: 37 },
+  { handle: "@alexmakes", name: "Alex Morgan", earned: 1686.8, views: 402300, clips: 28 },
+];
+
 export const moderationItems = [
   { id: "Q-0814", creator: "@pixelpilot", campaign: "Orbit Protocol", platform: "TikTok", views: 48200, age: "12 min ago", risk: "High view velocity", detail: "Views rose 8.4× in 11 minutes; engagement ratio is below this campaign's usual range.", riskLevel: "high" },
   { id: "Q-0812", creator: "@mariomakes", campaign: "Memehouse", platform: "Instagram", views: 16400, age: "34 min ago", risk: "Unusual engagement mix", detail: "Like-to-view ratio differs from the creator's recent verified baseline.", riskLevel: "medium" },
