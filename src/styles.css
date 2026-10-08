@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Figtree", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Syne", ui-sans-serif, system-ui, sans-serif;
+
+  --color-background: #09090b;
+  --color-foreground: #f4f4f5;
+  --color-card: #121214;
+  --color-card-foreground: #f4f4f5;
+  --color-secondary: #1a1a1e;
+  --color-secondary-foreground: #e4e4e7;
+  --color-muted: #18181b;
+  --color-muted-foreground: #a1a1aa;
+  --color-border: #2a2a30;
+  --color-primary: #ececef;
+  --color-primary-foreground: #09090b;
+  --color-ring: #d4d8de;
+  --color-destructive: #ef6b63;
+  --color-good: #7dba8a;
+  --color-warn: #d4b07a;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+}
+
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    background: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+  }
+
+  h1,
+  h2,
+  .font-display {
+    font-family: var(--font-display);
+  }
+
+  * {
+    border-color: var(--color-border);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
