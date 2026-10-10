@@ -1,0 +1,23 @@
+{
+  "routes": [
+    { "path": "/", "title": "Home" },
+    { "path": "/login", "title": "Sign in" },
+    { "path": "/dashboard", "title": "Dashboard" },
+    { "path": "/campaigns", "title": "Campaigns" },
+    { "path": "/campaigns/:id", "title": "Campaign brief" },
+    { "path": "/submit", "title": "Submit a clip" },
+    { "path": "/submissions", "title": "Submissions" },
+    { "path": "/submissions/:id", "title": "Submission" },
+    { "path": "/earnings", "title": "Earnings" },
+    { "path": "/guides", "title": "Guides" },
+    { "path": "/guides/:slug", "title": "Guide" },
+    { "path": "/assets", "title": "Assets" },
+    { "path": "/profile", "title": "Profile" },
+    { "path": "/admin", "title": "Admin" },
+    { "path": "/admin/campaigns", "title": "Admin campaigns" },
+    { "path": "/admin/creators", "title": "Admin creators" },
+    { "path": "/admin/payouts", "title": "Admin payouts" },
+    { "path": "/admin/submissions", "title": "Admin submissions" },
+    { "path": "/admin/submissions/:id", "title": "Review submission" }
+  ]
+}
