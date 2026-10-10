@@ -52,6 +52,9 @@ function AdminHome() {
         <Button asChild>
           <Link to="/admin/submissions">Review queue</Link>
         </Button>
+        <Button asChild>
+          <Link to="/admin/applications">Applications</Link>
+        </Button>
         <Button asChild variant="outline">
           <Link to="/admin/campaigns">Campaigns</Link>
         </Button>

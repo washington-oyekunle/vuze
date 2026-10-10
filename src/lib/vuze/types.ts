@@ -6,6 +6,7 @@ export type SubmissionStatus =
   | "approved"
   | "rejected"
   | "paid";
+export type ApplicationStatus = "pending" | "accepted" | "declined" | "withdrawn";
 export type ProfileRole = "creator" | "admin";
 
 export type Profile = {
@@ -37,6 +38,20 @@ export type Campaign = {
   organicOnly: boolean;
   maxSubmissions: number | null;
   submissionCount: number;
+};
+
+export type CampaignApplication = {
+  id: number;
+  campaignId: number;
+  campaignTitle: string;
+  campaignBrand: string;
+  userId: string;
+  creatorName: string;
+  pitch: string;
+  status: ApplicationStatus;
+  adminNotes: string;
+  createdAt: string;
+  reviewedAt: string | null;
 };
 
 export type Submission = {

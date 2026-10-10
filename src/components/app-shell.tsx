@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   Megaphone,
   Clapperboard,
+  ClipboardList,
   Wallet,
   BookOpen,
   FolderOpen,
@@ -18,6 +19,7 @@ import {
 const creatorNav = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/campaigns", label: "Campaigns", icon: Megaphone },
+  { to: "/applications", label: "Applications", icon: ClipboardList },
   { to: "/submissions", label: "Submissions", icon: Clapperboard },
   { to: "/earnings", label: "Earnings", icon: Wallet },
   { to: "/guides", label: "Guides", icon: BookOpen },
@@ -137,5 +139,4 @@ export function PageHeader({
     </div>
   );
 }
-
 

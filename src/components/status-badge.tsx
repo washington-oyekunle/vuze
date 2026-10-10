@@ -1,5 +1,16 @@
 import { Badge } from "@/components/ui/badge";
-import type { CampaignStatus, SubmissionStatus } from "@/lib/vuze/types";
+import type { ApplicationStatus, CampaignStatus, SubmissionStatus } from "@/lib/vuze/types";
+
+export function ApplicationStatusBadge({ status }: { status: ApplicationStatus }) {
+  const map: Record<ApplicationStatus, { tone: "neutral" | "good" | "warn" | "bad"; label: string }> = {
+    pending: { tone: "warn", label: "Pending review" },
+    accepted: { tone: "good", label: "Accepted" },
+    declined: { tone: "bad", label: "Declined" },
+    withdrawn: { tone: "neutral", label: "Withdrawn" },
+  };
+  const m = map[status];
+  return <Badge tone={m.tone}>{m.label}</Badge>;
+}
 
 export function SubmissionStatusBadge({ status }: { status: SubmissionStatus }) {
   const map: Record<SubmissionStatus, { tone: "neutral" | "good" | "warn" | "bad" | "accent"; label: string }> =

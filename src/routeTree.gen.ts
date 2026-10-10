@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApplicationsRouteImport } from './routes/applications'
 import { Route as AssetsRouteImport } from './routes/assets'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as EarningsRouteImport } from './routes/earnings'
@@ -17,6 +18,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as SubmitRouteImport } from './routes/submit'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
+import { Route as AdminApplicationsRouteImport } from './routes/admin/applications'
 import { Route as AdminCampaignsRouteImport } from './routes/admin/campaigns'
 import { Route as AdminCreatorsRouteImport } from './routes/admin/creators'
 import { Route as AdminPayoutsRouteImport } from './routes/admin/payouts'
@@ -33,6 +35,11 @@ import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApplicationsRoute = ApplicationsRouteImport.update({
+  id: '/applications',
+  path: '/applications',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AssetsRoute = AssetsRouteImport.update({
@@ -68,6 +75,11 @@ const SubmitRoute = SubmitRouteImport.update({
 const AdminIndexRoute = AdminIndexRouteImport.update({
   id: '/admin/',
   path: '/admin/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminApplicationsRoute = AdminApplicationsRouteImport.update({
+  id: '/admin/applications',
+  path: '/admin/applications',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminCampaignsRoute = AdminCampaignsRouteImport.update({
@@ -133,12 +145,14 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/applications': typeof ApplicationsRoute
   '/assets': typeof AssetsRoute
   '/dashboard': typeof DashboardRoute
   '/earnings': typeof EarningsRoute
   '/login': typeof LoginRoute
   '/profile': typeof ProfileRoute
   '/submit': typeof SubmitRoute
+  '/admin/applications': typeof AdminApplicationsRoute
   '/admin/campaigns': typeof AdminCampaignsRoute
   '/admin/creators': typeof AdminCreatorsRoute
   '/admin/payouts': typeof AdminPayoutsRoute
@@ -155,12 +169,14 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/applications': typeof ApplicationsRoute
   '/assets': typeof AssetsRoute
   '/dashboard': typeof DashboardRoute
   '/earnings': typeof EarningsRoute
   '/login': typeof LoginRoute
   '/profile': typeof ProfileRoute
   '/submit': typeof SubmitRoute
+  '/admin/applications': typeof AdminApplicationsRoute
   '/admin/campaigns': typeof AdminCampaignsRoute
   '/admin/creators': typeof AdminCreatorsRoute
   '/admin/payouts': typeof AdminPayoutsRoute
@@ -178,12 +194,14 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/applications': typeof ApplicationsRoute
   '/assets': typeof AssetsRoute
   '/dashboard': typeof DashboardRoute
   '/earnings': typeof EarningsRoute
   '/login': typeof LoginRoute
   '/profile': typeof ProfileRoute
   '/submit': typeof SubmitRoute
+  '/admin/applications': typeof AdminApplicationsRoute
   '/admin/campaigns': typeof AdminCampaignsRoute
   '/admin/creators': typeof AdminCreatorsRoute
   '/admin/payouts': typeof AdminPayoutsRoute
@@ -202,12 +220,14 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/applications'
     | '/assets'
     | '/dashboard'
     | '/earnings'
     | '/login'
     | '/profile'
     | '/submit'
+    | '/admin/applications'
     | '/admin/campaigns'
     | '/admin/creators'
     | '/admin/payouts'
@@ -224,12 +244,14 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/applications'
     | '/assets'
     | '/dashboard'
     | '/earnings'
     | '/login'
     | '/profile'
     | '/submit'
+    | '/admin/applications'
     | '/admin/campaigns'
     | '/admin/creators'
     | '/admin/payouts'
@@ -246,12 +268,14 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/applications'
     | '/assets'
     | '/dashboard'
     | '/earnings'
     | '/login'
     | '/profile'
     | '/submit'
+    | '/admin/applications'
     | '/admin/campaigns'
     | '/admin/creators'
     | '/admin/payouts'
@@ -269,12 +293,14 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApplicationsRoute: typeof ApplicationsRoute
   AssetsRoute: typeof AssetsRoute
   DashboardRoute: typeof DashboardRoute
   EarningsRoute: typeof EarningsRoute
   LoginRoute: typeof LoginRoute
   ProfileRoute: typeof ProfileRoute
   SubmitRoute: typeof SubmitRoute
+  AdminApplicationsRoute: typeof AdminApplicationsRoute
   AdminCampaignsRoute: typeof AdminCampaignsRoute
   AdminCreatorsRoute: typeof AdminCreatorsRoute
   AdminPayoutsRoute: typeof AdminPayoutsRoute
@@ -296,6 +322,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/applications': {
+      id: '/applications'
+      path: '/applications'
+      fullPath: '/applications'
+      preLoaderRoute: typeof ApplicationsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/assets': {
@@ -345,6 +378,13 @@ declare module '@tanstack/react-router' {
       path: '/admin'
       fullPath: '/admin/'
       preLoaderRoute: typeof AdminIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/applications': {
+      id: '/admin/applications'
+      path: '/admin/applications'
+      fullPath: '/admin/applications'
+      preLoaderRoute: typeof AdminApplicationsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/campaigns': {
@@ -447,12 +487,14 @@ const AdminSubmissionsRouteWithChildren =
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApplicationsRoute: ApplicationsRoute,
   AssetsRoute: AssetsRoute,
   DashboardRoute: DashboardRoute,
   EarningsRoute: EarningsRoute,
   LoginRoute: LoginRoute,
   ProfileRoute: ProfileRoute,
   SubmitRoute: SubmitRoute,
+  AdminApplicationsRoute: AdminApplicationsRoute,
   AdminCampaignsRoute: AdminCampaignsRoute,
   AdminCreatorsRoute: AdminCreatorsRoute,
   AdminPayoutsRoute: AdminPayoutsRoute,

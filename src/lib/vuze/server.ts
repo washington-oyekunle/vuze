@@ -7,6 +7,7 @@ import type {
   AdminOverview,
   AssetItem,
   Campaign,
+  CampaignApplication,
   DashboardStats,
   Guide,
   Payout,
@@ -31,6 +32,22 @@ function mapCampaign(r: Record<string, unknown>): Campaign {
     organicOnly: Boolean(r.organic_only),
     maxSubmissions: r.max_submissions == null ? null : num(r.max_submissions),
     submissionCount: num(r.submission_count),
+  };
+}
+
+function mapApplication(r: Record<string, unknown>): CampaignApplication {
+  return {
+    id: num(r.id),
+    campaignId: num(r.campaign_id),
+    campaignTitle: String(r.campaign_title ?? ""),
+    campaignBrand: String(r.campaign_brand ?? ""),
+    userId: String(r.user_id),
+    creatorName: String(r.creator_name ?? ""),
+    pitch: String(r.pitch ?? ""),
+    status: r.status as CampaignApplication["status"],
+    adminNotes: String(r.admin_notes ?? ""),
+    createdAt: String(r.created_at),
+    reviewedAt: r.reviewed_at ? String(r.reviewed_at) : null,
   };
 }
 
@@ -116,6 +133,83 @@ export const getCampaign = createServerFn({ method: "GET" })
       [data.id],
     );
     return list[0] ? mapCampaign(list[0]) : null;
+  });
+
+const applicationSelect = `
+  a.id, a.campaign_id, a.user_id, a.pitch, a.status, a.admin_notes, a.created_at, a.reviewed_at,
+  c.title as campaign_title, c.brand as campaign_brand, p.display_name as creator_name
+`;
+
+export const getMyCampaignApplication = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .validator(z.object({ campaignId: z.number() }))
+  .handler(async ({ context, data }): Promise<CampaignApplication | null> => {
+    const sql = await getSql();
+    const rows = await sql.query<Record<string, unknown>>(
+      `select ${applicationSelect}
+       from campaign_applications a
+       join campaigns c on c.id = a.campaign_id
+       join profiles p on p.user_id = a.user_id
+       where a.campaign_id = $1 and a.user_id = $2`,
+      [data.campaignId, context.userId],
+    );
+    return rows[0] ? mapApplication(rows[0]) : null;
+  });
+
+export const listMyApplications = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }): Promise<CampaignApplication[]> => {
+    const sql = await getSql();
+    const rows = await sql.query<Record<string, unknown>>(
+      `select ${applicationSelect}
+       from campaign_applications a
+       join campaigns c on c.id = a.campaign_id
+       join profiles p on p.user_id = a.user_id
+       where a.user_id = $1
+       order by a.created_at desc`,
+      [context.userId],
+    );
+    return rows.map(mapApplication);
+  });
+
+export const applyToCampaign = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ campaignId: z.number(), pitch: z.string().max(800).optional() }))
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await ensureProfile(context.userId);
+    const profile = await getProfileRow(context.userId);
+    if (profile?.suspended) throw new Error("This account is suspended from campaigns");
+
+    const campaigns = await sql<Record<string, unknown>>`
+      select id, status from campaigns where id = ${data.campaignId}
+    `;
+    if (!campaigns[0]) throw new Error("Campaign not found");
+    if (String(campaigns[0].status) !== "live") throw new Error("This campaign is no longer accepting applications");
+
+    const existing = await sql<{ id: number; status: string }>`
+      select id, status from campaign_applications
+      where campaign_id = ${data.campaignId} and user_id = ${context.userId}
+    `;
+    if (existing[0] && existing[0].status !== "withdrawn") {
+      throw new Error("You have already applied to this campaign");
+    }
+
+    if (existing[0]) {
+      await sql`
+        update campaign_applications
+        set pitch = ${data.pitch?.trim() ?? ""}, status = 'pending', admin_notes = '', reviewed_at = null, reviewed_by = null, created_at = now()
+        where id = ${existing[0].id}
+      `;
+      return { id: num(existing[0].id) };
+    }
+
+    const rows = await sql<{ id: number }>`
+      insert into campaign_applications (campaign_id, user_id, pitch)
+      values (${data.campaignId}, ${context.userId}, ${data.pitch?.trim() ?? ""})
+      returning id
+    `;
+    return { id: num(rows[0]?.id) };
   });
 
 export const bootstrapMe = createServerFn({ method: "POST" })
@@ -419,6 +513,47 @@ export const getAdminOverview = createServerFn({ method: "GET" })
       flagged: num(flagged[0]?.c),
       creators: num(creators[0]?.c),
     };
+  });
+
+export const adminListApplications = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .validator(z.object({ status: z.string().optional() }))
+  .handler(async ({ context, data }) => {
+    await requireAdmin(context.userId);
+    const sql = await getSql();
+    const rows = await sql.query<Record<string, unknown>>(
+      `select ${applicationSelect}
+       from campaign_applications a
+       join campaigns c on c.id = a.campaign_id
+       join profiles p on p.user_id = a.user_id
+       where ($1::text is null or a.status = $1)
+       order by a.created_at desc`,
+      [data.status ?? null],
+    );
+    return rows.map(mapApplication);
+  });
+
+export const adminReviewApplication = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    z.object({
+      id: z.number(),
+      action: z.enum(["accept", "decline"]),
+      notes: z.string().max(600).optional(),
+    }),
+  )
+  .handler(async ({ context, data }) => {
+    await requireAdmin(context.userId);
+    const sql = await getSql();
+    const status = data.action === "accept" ? "accepted" : "declined";
+    const rows = await sql<{ id: number }>`
+      update campaign_applications
+      set status = ${status}, admin_notes = ${data.notes?.trim() ?? ""}, reviewed_at = now(), reviewed_by = ${context.userId}
+      where id = ${data.id} and status = 'pending'
+      returning id
+    `;
+    if (!rows[0]) throw new Error("Application is no longer pending");
+    return { ok: true };
   });
 
 export const adminListSubmissions = createServerFn({ method: "GET" })
