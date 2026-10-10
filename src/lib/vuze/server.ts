@@ -13,6 +13,7 @@ import type {
   Payout,
   Profile,
   Submission,
+  SubmissionReview,
 } from "./types";
 
 function mapCampaign(r: Record<string, unknown>): Campaign {
@@ -76,6 +77,18 @@ function mapSubmission(r: Record<string, unknown>): Submission {
     createdAt: String(r.created_at),
     reviewedAt: r.reviewed_at ? String(r.reviewed_at) : null,
     paidAt: r.paid_at ? String(r.paid_at) : null,
+  };
+}
+
+function mapSubmissionReview(r: Record<string, unknown>): SubmissionReview {
+  return {
+    id: num(r.id),
+    submissionId: num(r.submission_id),
+    reviewerName: String(r.reviewer_name ?? "VUZE desk"),
+    action: r.action as SubmissionReview["action"],
+    reason: String(r.reason ?? ""),
+    notes: String(r.notes ?? ""),
+    createdAt: String(r.created_at),
   };
 }
 
@@ -399,6 +412,23 @@ export const getMySubmission = createServerFn({ method: "GET" })
     return rows[0] ? mapSubmission(rows[0]) : null;
   });
 
+export const getSubmissionReviews = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .validator(z.object({ id: z.number() }))
+  .handler(async ({ context, data }): Promise<SubmissionReview[]> => {
+    const sql = await getSql();
+    const rows = await sql.query<Record<string, unknown>>(
+      `select r.*, p.display_name as reviewer_name
+       from submission_reviews r
+       left join profiles p on p.user_id = r.reviewer_id
+       join submissions s on s.id = r.submission_id
+       where r.submission_id = $1 and s.user_id = $2
+       order by r.created_at desc`,
+      [data.id, context.userId],
+    );
+    return rows.map(mapSubmissionReview);
+  });
+
 export const resubmitProof = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(
@@ -597,18 +627,40 @@ export const adminGetSubmission = createServerFn({ method: "GET" })
     return rows[0] ? mapSubmission(rows[0]) : null;
   });
 
+export const adminGetSubmissionReviews = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .validator(z.object({ id: z.number() }))
+  .handler(async ({ context, data }): Promise<SubmissionReview[]> => {
+    await requireAdmin(context.userId);
+    const sql = await getSql();
+    const rows = await sql.query<Record<string, unknown>>(
+      `select r.*, p.display_name as reviewer_name
+       from submission_reviews r
+       left join profiles p on p.user_id = r.reviewer_id
+       where r.submission_id = $1
+       order by r.created_at desc`,
+      [data.id],
+    );
+    return rows.map(mapSubmissionReview);
+  });
+
 export const adminReviewSubmission = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(
     z.object({
       id: z.number(),
       action: z.enum(["approve", "reject", "needs_proof", "flag"]),
+      reason: z.string().max(120).optional(),
       notes: z.string().max(600).optional(),
     }),
   )
   .handler(async ({ context, data }) => {
     await requireAdmin(context.userId);
     const sql = await getSql();
+    await sql`
+      insert into submission_reviews (submission_id, reviewer_id, action, reason, notes)
+      values (${data.id}, ${context.userId}, ${data.action}, ${data.reason ?? ""}, ${data.notes ?? ""})
+    `;
     if (data.action === "flag") {
       await sql`update submissions set flagged = true, admin_notes = ${data.notes ?? ""} where id = ${data.id}`;
       return { ok: true };

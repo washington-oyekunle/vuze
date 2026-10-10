@@ -3,7 +3,7 @@ import { AppShell, PageHeader } from "@/components/app-shell";
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { useQuery } from "@tanstack/react-query";
-import { getMySubmission, resubmitProof } from "@/lib/vuze/server";
+import { getMySubmission, getSubmissionReviews, resubmitProof } from "@/lib/vuze/server";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +22,11 @@ function SubmissionDetail() {
   const q = useQuery({
     queryKey: ["mysub", id],
     queryFn: () => getMySubmission({ data: { id: Number(id) } }),
+    enabled: !!user,
+  });
+  const reviews = useQuery({
+    queryKey: ["my-sub-reviews", id],
+    queryFn: () => getSubmissionReviews({ data: { id: Number(id) } }),
     enabled: !!user,
   });
   const s = q.data;
@@ -97,7 +102,8 @@ function SubmissionDetail() {
         <Card className="mt-4">
           <CardContent>
             <form className="grid gap-3" onSubmit={onUpdate}>
-              <h2 className="text-sm font-medium">Update proof</h2>
+                <h2 className="text-sm font-medium">Address review feedback</h2>
+                <p className="text-sm text-muted-foreground">Update the proof requested by the VUZE desk, then resubmit for another review.</p>
               <Textarea
                 placeholder="Analytics URLs"
                 value={analyticsUrls}
@@ -111,11 +117,29 @@ function SubmissionDetail() {
                 <div className="space-y-1"><Label>Comments</Label><Input value={comments} onChange={(e) => setComments(e.target.value)} /></div>
                 <div className="space-y-1"><Label>Shares</Label><Input value={shares} onChange={(e) => setShares(e.target.value)} /></div>
               </div>
-              <Button type="submit">Resubmit</Button>
+              <Button type="submit">Resubmit for review</Button>
             </form>
           </CardContent>
         </Card>
       ) : null}
+      <Card className="mt-4">
+        <CardContent className="space-y-3">
+          <h2 className="text-sm font-medium">Review history</h2>
+          {(reviews.data ?? []).length === 0 ? (
+            <p className="text-sm text-muted-foreground">Your submission has not been reviewed yet.</p>
+          ) : (
+            <ul className="space-y-3">
+              {reviews.data!.map((review) => (
+                <li key={review.id} className="border-l-2 border-border pl-3 text-sm">
+                  <p className="font-medium">{review.action === "needs_proof" ? "Revision requested" : review.action.replace("_", " ")}</p>
+                  <p className="text-xs text-muted-foreground">{review.reason || "No reason provided"} · {new Date(review.createdAt).toLocaleString()}</p>
+                  {review.notes ? <p className="mt-1 text-muted-foreground">{review.notes}</p> : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
     </AppShell>
   );
 }

@@ -80,6 +80,16 @@ export type Submission = {
   paidAt: string | null;
 };
 
+export type SubmissionReview = {
+  id: number;
+  submissionId: number;
+  reviewerName: string;
+  action: "approve" | "reject" | "needs_proof" | "flag";
+  reason: string;
+  notes: string;
+  createdAt: string;
+};
+
 export type Guide = {
   slug: string;
   category: string;

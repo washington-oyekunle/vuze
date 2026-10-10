@@ -3,7 +3,7 @@ import { AppShell, PageHeader } from "@/components/app-shell";
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { useQuery } from "@tanstack/react-query";
-import { adminGetSubmission, adminReviewSubmission, adminMarkPaid, getMyProfile } from "@/lib/vuze/server";
+import { adminGetSubmission, adminGetSubmissionReviews, adminReviewSubmission, adminMarkPaid, getMyProfile } from "@/lib/vuze/server";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -25,8 +25,14 @@ function AdminReview() {
     queryFn: () => adminGetSubmission({ data: { id: Number(id) } }),
     enabled: me.data?.role === "admin",
   });
+  const reviews = useQuery({
+    queryKey: ["admin-sub-reviews", id],
+    queryFn: () => adminGetSubmissionReviews({ data: { id: Number(id) } }),
+    enabled: me.data?.role === "admin",
+  });
   const s = q.data;
   const [notes, setNotes] = useState("");
+  const [reason, setReason] = useState("Needs more analytics proof");
   const [reference, setReference] = useState("");
 
   if (isPending) return <AppShell><p className="text-sm text-muted-foreground">Loading…</p></AppShell>;
@@ -37,9 +43,10 @@ function AdminReview() {
   async function act(action: "approve" | "reject" | "needs_proof" | "flag") {
     if (!s) return;
     try {
-      await adminReviewSubmission({ data: { id: s.id, action, notes } });
+      await adminReviewSubmission({ data: { id: s.id, action, reason, notes } });
       toast.success("Updated");
       await q.refetch();
+      await reviews.refetch();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed");
     }
@@ -83,6 +90,15 @@ function AdminReview() {
             <p className="text-xs text-muted-foreground">Estimated</p>
             <p className="font-display text-2xl tabular-nums">{money(s.estimatedPayout)}</p>
             <Textarea placeholder="Reviewer notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
+            <select className="h-11 w-full rounded-lg border border-border bg-secondary px-3 text-sm" value={reason} onChange={(e) => setReason(e.target.value)}>
+              <option>Needs more analytics proof</option>
+              <option>Wrong audience or platform</option>
+              <option>Off-brief creative</option>
+              <option>Duplicate or reused content</option>
+              <option>Inorganic traffic concern</option>
+              <option>Copyright or claim concern</option>
+              <option>Quality below campaign standard</option>
+            </select>
             <Button className="w-full" onClick={() => void act("approve")}>
               Approve
             </Button>
@@ -107,6 +123,24 @@ function AdminReview() {
           </CardContent>
         </Card>
       </div>
+      <Card className="mt-4">
+        <CardContent className="space-y-3">
+          <h2 className="text-sm font-medium">Review history</h2>
+          {(reviews.data ?? []).length === 0 ? (
+            <p className="text-sm text-muted-foreground">No decisions recorded yet.</p>
+          ) : (
+            <ul className="space-y-3">
+              {reviews.data!.map((review) => (
+                <li key={review.id} className="border-l-2 border-border pl-3 text-sm">
+                  <p className="font-medium">{review.action === "needs_proof" ? "Revision requested" : review.action.replace("_", " ")}</p>
+                  <p className="text-xs text-muted-foreground">{review.reason || "No reason provided"} · {review.reviewerName} · {new Date(review.createdAt).toLocaleString()}</p>
+                  {review.notes ? <p className="mt-1 text-muted-foreground">{review.notes}</p> : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
     </AppShell>
   );
 }
