@@ -31,6 +31,7 @@ import { Route as SubmissionsIndexRouteImport } from './routes/submissions/index
 import { Route as SubmissionsIdRouteImport } from './routes/submissions/$id'
 import { Route as AdminSubmissionsIdRouteImport } from './routes/admin/submissions.$id'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiUploadsAnalyticsRouteImport } from './routes/api/uploads/analytics'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -142,6 +143,11 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiUploadsAnalyticsRoute = ApiUploadsAnalyticsRouteImport.update({
+  id: '/api/uploads/analytics',
+  path: '/api/uploads/analytics',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -166,6 +172,7 @@ export interface FileRoutesByFullPath {
   '/submissions/': typeof SubmissionsIndexRoute
   '/admin/submissions/$id': typeof AdminSubmissionsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/uploads/analytics': typeof ApiUploadsAnalyticsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -190,6 +197,7 @@ export interface FileRoutesByTo {
   '/submissions': typeof SubmissionsIndexRoute
   '/admin/submissions/$id': typeof AdminSubmissionsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/uploads/analytics': typeof ApiUploadsAnalyticsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -215,6 +223,7 @@ export interface FileRoutesById {
   '/submissions/': typeof SubmissionsIndexRoute
   '/admin/submissions/$id': typeof AdminSubmissionsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/uploads/analytics': typeof ApiUploadsAnalyticsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -241,6 +250,7 @@ export interface FileRouteTypes {
     | '/submissions/'
     | '/admin/submissions/$id'
     | '/api/auth/$'
+    | '/api/uploads/analytics'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -265,6 +275,7 @@ export interface FileRouteTypes {
     | '/submissions'
     | '/admin/submissions/$id'
     | '/api/auth/$'
+    | '/api/uploads/analytics'
   id:
     | '__root__'
     | '/'
@@ -289,6 +300,7 @@ export interface FileRouteTypes {
     | '/submissions/'
     | '/admin/submissions/$id'
     | '/api/auth/$'
+    | '/api/uploads/analytics'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -313,6 +325,7 @@ export interface RootRouteChildren {
   GuidesIndexRoute: typeof GuidesIndexRoute
   SubmissionsIndexRoute: typeof SubmissionsIndexRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiUploadsAnalyticsRoute: typeof ApiUploadsAnalyticsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -471,6 +484,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/uploads/analytics': {
+      id: '/api/uploads/analytics'
+      path: '/api/uploads/analytics'
+      fullPath: '/api/uploads/analytics'
+      preLoaderRoute: typeof ApiUploadsAnalyticsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -507,6 +527,7 @@ const rootRouteChildren: RootRouteChildren = {
   GuidesIndexRoute: GuidesIndexRoute,
   SubmissionsIndexRoute: SubmissionsIndexRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiUploadsAnalyticsRoute: ApiUploadsAnalyticsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

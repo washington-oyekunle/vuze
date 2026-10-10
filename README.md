@@ -26,4 +26,4 @@ npm run dev
 npm run build
 ```
 
-Set `DATABASE_URL` and `BETTER_AUTH_SECRET` before deploy. Google and X sign-in need `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `TWITTER_CLIENT_ID`, and `TWITTER_CLIENT_SECRET`.
+Set `DATABASE_URL`, `BETTER_AUTH_SECRET`, and `BLOB_READ_WRITE_TOKEN` before deploy. `BLOB_READ_WRITE_TOKEN` is required for approved creators to upload analytics screen recordings for payout. Google and X sign-in need `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `TWITTER_CLIENT_ID`, and `TWITTER_CLIENT_SECRET`.

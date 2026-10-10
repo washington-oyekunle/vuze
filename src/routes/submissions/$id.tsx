@@ -37,7 +37,8 @@ function SubmissionDetail() {
   const [likes, setLikes] = useState("");
   const [comments, setComments] = useState("");
   const [shares, setShares] = useState("");
-  const [payoutProofUrl, setPayoutProofUrl] = useState("");
+  const [payoutProofFile, setPayoutProofFile] = useState<File | null>(null);
+  const [uploadingProof, setUploadingProof] = useState(false);
 
   if (isPending) return <AppShell><p className="text-sm text-muted-foreground">Loading…</p></AppShell>;
   if (!user) return <RedirectToSignIn to="/login" />;
@@ -70,14 +71,22 @@ function SubmissionDetail() {
 
   async function onPayoutProof(e: React.FormEvent) {
     e.preventDefault();
-    if (!s || !payoutProofUrl) return;
+    if (!s || !payoutProofFile) return;
+    setUploadingProof(true);
     try {
-      await submitPayoutProof({ data: { id: s.id, payoutProofUrl } });
+      const form = new FormData();
+      form.set("file", payoutProofFile);
+      const upload = await fetch("/api/uploads/analytics", { method: "POST", body: form });
+      const result = (await upload.json()) as { url?: string; error?: string };
+      if (!upload.ok || !result.url) throw new Error(result.error || "Upload failed");
+      await submitPayoutProof({ data: { id: s.id, payoutProofUrl: result.url } });
       toast.success("Payout proof submitted for Friday's payout run");
-      setPayoutProofUrl("");
+      setPayoutProofFile(null);
       await q.refetch();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not submit payout proof");
+    } finally {
+      setUploadingProof(false);
     }
   }
 
@@ -142,15 +151,16 @@ function SubmissionDetail() {
             <form className="grid gap-3" onSubmit={onPayoutProof}>
               <div>
                 <h2 className="text-sm font-medium">Request payout</h2>
-                <p className="mt-1 text-sm text-muted-foreground">Upload a screen recording of the platform analytics for this post, then paste its secure URL below. Payouts are processed every Friday. A video can only be paid once.</p>
+                <p className="mt-1 text-sm text-muted-foreground">Upload a screen recording of the platform analytics for this post. MP4, WebM, or MOV up to 100 MB. Payouts are processed every Friday. A video can only be paid once.</p>
               </div>
               {s.payoutProofUrl ? (
                 <a href={s.payoutProofUrl} target="_blank" rel="noreferrer" className="text-sm underline">View submitted analytics recording</a>
               ) : (
                 <>
-                  <Label htmlFor="payout-proof">Analytics screen-recording URL</Label>
-                  <Input id="payout-proof" type="url" required value={payoutProofUrl} onChange={(e) => setPayoutProofUrl(e.target.value)} placeholder="https://secure-link-to-your-recording" />
-                  <Button type="submit">Submit for Friday payout</Button>
+                  <Label htmlFor="payout-proof">Analytics screen recording</Label>
+                  <Input id="payout-proof" type="file" required accept="video/mp4,video/webm,video/quicktime" onChange={(e) => setPayoutProofFile(e.target.files?.[0] ?? null)} />
+                  {payoutProofFile ? <p className="text-xs text-muted-foreground">Selected: {payoutProofFile.name}</p> : null}
+                  <Button type="submit" disabled={uploadingProof}>{uploadingProof ? "Uploading…" : "Submit for Friday payout"}</Button>
                 </>
               )}
             </form>
