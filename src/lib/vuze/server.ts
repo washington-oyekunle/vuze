@@ -73,6 +73,7 @@ function mapSubmission(r: Record<string, unknown>): Submission {
     status: r.status as Submission["status"],
     estimatedPayout: num(r.estimated_payout),
     adminNotes: String(r.admin_notes ?? ""),
+    payoutProofUrl: String(r.payout_proof_url ?? ""),
     flagged: Boolean(r.flagged),
     createdAt: String(r.created_at),
     reviewedAt: r.reviewed_at ? String(r.reviewed_at) : null,
@@ -412,6 +413,23 @@ export const getMySubmission = createServerFn({ method: "GET" })
     return rows[0] ? mapSubmission(rows[0]) : null;
   });
 
+export const submitPayoutProof = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ id: z.number(), payoutProofUrl: z.string().url() }))
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    const rows = await sql<Record<string, unknown>>`
+      select id, status from submissions where id = ${data.id} and user_id = ${context.userId}
+    `;
+    if (!rows[0]) throw new Error("Submission not found");
+    if (String(rows[0].status) !== "approved") throw new Error("Payout proof is available after approval");
+    await sql`
+      update submissions set payout_proof_url = ${data.payoutProofUrl}
+      where id = ${data.id} and user_id = ${context.userId}
+    `;
+    return { ok: true };
+  });
+
 export const getSubmissionReviews = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .validator(z.object({ id: z.number() }))
@@ -688,13 +706,17 @@ export const adminMarkPaid = createServerFn({ method: "POST" })
   )
   .handler(async ({ context, data }) => {
     await requireAdmin(context.userId);
+    if (new Date().getDay() !== 5) throw new Error("Payouts are processed every Friday");
     const sql = await getSql();
     const rows = await sql<Record<string, unknown>>`
-      select id, user_id, estimated_payout, status from submissions where id = ${data.submissionId}
+      select id, user_id, estimated_payout, status, payout_proof_url from submissions where id = ${data.submissionId}
     `;
     const s = rows[0];
     if (!s) throw new Error("Not found");
     if (String(s.status) !== "approved") throw new Error("Only approved submissions can be paid");
+    if (!String(s.payout_proof_url ?? "")) throw new Error("Creator must submit an analytics screen recording before payout");
+    const alreadyPaid = await sql<{ c: number }>`select count(*)::int as c from payouts where submission_id = ${data.submissionId}`;
+    if (num(alreadyPaid[0]?.c) > 0) throw new Error("This video has already been paid");
     await sql`
       insert into payouts (user_id, submission_id, amount, reference)
       values (${String(s.user_id)}, ${data.submissionId}, ${num(s.estimated_payout)}, ${data.reference})
@@ -722,7 +744,7 @@ export const adminListPayouts = createServerFn({ method: "GET" })
        from submissions s
        join campaigns c on c.id = s.campaign_id
        join profiles p on p.user_id = s.user_id
-       where s.status = 'approved'
+       where s.status = 'approved' and s.payout_proof_url <> ''
        order by s.reviewed_at desc`,
     );
     return {

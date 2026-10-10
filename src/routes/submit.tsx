@@ -82,7 +82,7 @@ function SubmitPage() {
     <AppShell>
       <PageHeader
         title="Submit a clip"
-        description="Link + analytics. Views without watch time or retention are rejected."
+        description="Submit the public post link and analytics details. VUZE does not require the video file."
       />
       <Card>
         <CardContent>
@@ -122,12 +122,12 @@ function SubmitPage() {
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="proof">Analytics screenshot URLs</Label>
+              <Label htmlFor="proof">Public analytics links</Label>
               <Textarea
                 id="proof"
                 value={analyticsUrls}
                 onChange={(e) => setAnalyticsUrls(e.target.value)}
-                placeholder="One URL per line. Retention graph required."
+                placeholder="One URL per line. Retention graph required. Upload proof is only needed after approval for payout."
               />
             </div>
             <div className="grid grid-cols-2 gap-3 md:grid-cols-3">

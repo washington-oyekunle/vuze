@@ -24,7 +24,7 @@ function AdminPayouts() {
 
   return (
     <AppShell>
-      <PageHeader title="Payouts" />
+      <PageHeader title="Payouts" description="Payouts run every Friday. Only approved videos with analytics screen-recording proof appear in this queue, and each video can be paid once." />
       <h2 className="mb-2 text-sm text-muted-foreground">Approved, unpaid</h2>
       <div className="mb-8 overflow-hidden rounded-xl border border-border">
         {(q.data?.pending ?? []).length === 0 ? (

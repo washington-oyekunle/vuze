@@ -82,6 +82,11 @@ function AdminReview() {
             {s.analyticsUrls ? (
               <pre className="whitespace-pre-wrap rounded-lg bg-secondary p-3 text-xs">{s.analyticsUrls}</pre>
             ) : null}
+            {s.payoutProofUrl ? (
+              <a className="block underline" href={s.payoutProofUrl} target="_blank" rel="noreferrer">
+                Open payout analytics screen recording
+              </a>
+            ) : null}
             {s.notes ? <p>{s.notes}</p> : null}
           </CardContent>
         </Card>

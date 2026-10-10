@@ -74,6 +74,7 @@ export type Submission = {
   status: SubmissionStatus;
   estimatedPayout: number;
   adminNotes: string;
+  payoutProofUrl: string;
   flagged: boolean;
   createdAt: string;
   reviewedAt: string | null;

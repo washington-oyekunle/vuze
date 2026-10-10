@@ -3,7 +3,7 @@ import { AppShell, PageHeader } from "@/components/app-shell";
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { useQuery } from "@tanstack/react-query";
-import { getMySubmission, getSubmissionReviews, resubmitProof } from "@/lib/vuze/server";
+import { getMySubmission, getSubmissionReviews, resubmitProof, submitPayoutProof } from "@/lib/vuze/server";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,6 +37,7 @@ function SubmissionDetail() {
   const [likes, setLikes] = useState("");
   const [comments, setComments] = useState("");
   const [shares, setShares] = useState("");
+  const [payoutProofUrl, setPayoutProofUrl] = useState("");
 
   if (isPending) return <AppShell><p className="text-sm text-muted-foreground">Loading…</p></AppShell>;
   if (!user) return <RedirectToSignIn to="/login" />;
@@ -64,6 +65,19 @@ function SubmissionDetail() {
       await q.refetch();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Update failed");
+    }
+  }
+
+  async function onPayoutProof(e: React.FormEvent) {
+    e.preventDefault();
+    if (!s || !payoutProofUrl) return;
+    try {
+      await submitPayoutProof({ data: { id: s.id, payoutProofUrl } });
+      toast.success("Payout proof submitted for Friday's payout run");
+      setPayoutProofUrl("");
+      await q.refetch();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not submit payout proof");
     }
   }
 
@@ -118,6 +132,27 @@ function SubmissionDetail() {
                 <div className="space-y-1"><Label>Shares</Label><Input value={shares} onChange={(e) => setShares(e.target.value)} /></div>
               </div>
               <Button type="submit">Resubmit for review</Button>
+            </form>
+          </CardContent>
+        </Card>
+      ) : null}
+      {s.status === "approved" ? (
+        <Card className="mt-4">
+          <CardContent>
+            <form className="grid gap-3" onSubmit={onPayoutProof}>
+              <div>
+                <h2 className="text-sm font-medium">Request payout</h2>
+                <p className="mt-1 text-sm text-muted-foreground">Upload a screen recording of the platform analytics for this post, then paste its secure URL below. Payouts are processed every Friday. A video can only be paid once.</p>
+              </div>
+              {s.payoutProofUrl ? (
+                <a href={s.payoutProofUrl} target="_blank" rel="noreferrer" className="text-sm underline">View submitted analytics recording</a>
+              ) : (
+                <>
+                  <Label htmlFor="payout-proof">Analytics screen-recording URL</Label>
+                  <Input id="payout-proof" type="url" required value={payoutProofUrl} onChange={(e) => setPayoutProofUrl(e.target.value)} placeholder="https://secure-link-to-your-recording" />
+                  <Button type="submit">Submit for Friday payout</Button>
+                </>
+              )}
             </form>
           </CardContent>
         </Card>
