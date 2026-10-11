@@ -3,7 +3,7 @@ import { AppShell, PageHeader } from "@/components/app-shell";
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { useQuery } from "@tanstack/react-query";
-import { adminListCreators, adminUpdateCreator, getMyProfile } from "@/lib/vuze/server";
+import { adminListCreators, adminReviewPayoutWallet, adminUpdateCreator, getMyProfile } from "@/lib/vuze/server";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { money } from "@/lib/utils";
@@ -34,6 +34,16 @@ function AdminCreators() {
     }
   }
 
+  async function reviewWallet(userId: string, action: "verify" | "reject") {
+    try {
+      await adminReviewPayoutWallet({ data: { userId, action } });
+      toast.success(action === "verify" ? "Payout wallet verified" : "Payout wallet rejected");
+      await q.refetch();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not review wallet");
+    }
+  }
+
   return (
     <AppShell>
       <PageHeader title="Creators" />
@@ -50,9 +60,17 @@ function AdminCreators() {
                   {c.role === "admin" ? <Badge>Admin</Badge> : null}
                   {c.organicVerified ? <Badge tone="good">Organic</Badge> : null}
                   {c.suspended ? <Badge tone="bad">Suspended</Badge> : null}
+                  {c.payoutWalletStatus === "verified" ? <Badge tone="good">USD1 wallet verified</Badge> : c.payoutWalletStatus !== "not_set" ? <Badge>{`Wallet ${c.payoutWalletStatus}`}</Badge> : null}
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
+                {c.payoutWalletAddress ? <span className="max-w-56 truncate self-center text-xs text-muted-foreground" title={c.payoutWalletAddress}>{c.payoutWalletAddress}</span> : null}
+                {c.payoutWalletStatus === "pending" ? (
+                  <>
+                    <Button size="sm" variant="outline" onClick={() => void reviewWallet(c.userId, "reject")}>Reject wallet</Button>
+                    <Button size="sm" onClick={() => void reviewWallet(c.userId, "verify")}>Verify wallet</Button>
+                  </>
+                ) : null}
                 <Button size="sm" variant="outline" onClick={() => void patch(c.userId, { organicVerified: !c.organicVerified })}>
                   Toggle verified
                 </Button>

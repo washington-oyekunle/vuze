@@ -11,10 +11,15 @@ import type {
   DashboardStats,
   Guide,
   Payout,
+  PayoutBatch,
   Profile,
   Submission,
   SubmissionReview,
 } from "./types";
+
+export const USD1_SOLANA_MINT = "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB";
+export const USD1_DECIMALS = 6;
+export const USD1_NETWORK = "solana-mainnet" as const;
 
 function mapCampaign(r: Record<string, unknown>): Campaign {
   return {
@@ -91,6 +96,21 @@ function mapSubmissionReview(r: Record<string, unknown>): SubmissionReview {
     action: r.action as SubmissionReview["action"],
     reason: String(r.reason ?? ""),
     notes: String(r.notes ?? ""),
+    createdAt: String(r.created_at),
+  };
+}
+
+function mapPayoutBatch(r: Record<string, unknown>): PayoutBatch {
+  return {
+    id: num(r.id),
+    batchDate: String(r.batch_date),
+    asset: "USD1",
+    network: "solana-mainnet",
+    tokenMint: String(r.token_mint),
+    tokenDecimals: num(r.token_decimals),
+    status: r.status as PayoutBatch["status"],
+    totalUnits: num(r.total_units),
+    itemCount: num(r.item_count),
     createdAt: String(r.created_at),
   };
 }
@@ -239,7 +259,8 @@ export const bootstrapMe = createServerFn({ method: "POST" })
 async function getProfileRow(userId: string): Promise<Profile | null> {
   const sql = await getSql();
   const rows = await sql<Record<string, unknown>>`
-    select user_id, display_name, handle, bio, tiktok_url, instagram_url, youtube_url, role, organic_verified, suspended
+    select user_id, display_name, handle, bio, tiktok_url, instagram_url, youtube_url, role, organic_verified, suspended,
+      payout_wallet_address, payout_wallet_status, payout_wallet_verified_at
     from profiles where user_id = ${userId}
   `;
   const r = rows[0];
@@ -255,6 +276,9 @@ async function getProfileRow(userId: string): Promise<Profile | null> {
     role: r.role as Profile["role"],
     organicVerified: Boolean(r.organic_verified),
     suspended: Boolean(r.suspended),
+    payoutWalletAddress: r.payout_wallet_address ? String(r.payout_wallet_address) : null,
+    payoutWalletStatus: (r.payout_wallet_status ?? "not_set") as Profile["payoutWalletStatus"],
+    payoutWalletVerifiedAt: r.payout_wallet_verified_at ? String(r.payout_wallet_verified_at) : null,
   };
 }
 
@@ -288,6 +312,20 @@ export const updateMyProfile = createServerFn({ method: "POST" })
         tiktok_url = ${data.tiktokUrl || null},
         instagram_url = ${data.instagramUrl || null},
         youtube_url = ${data.youtubeUrl || null}
+      where user_id = ${context.userId}
+    `;
+    return getProfileRow(context.userId);
+  });
+
+export const updatePayoutWallet = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ walletAddress: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "Enter a valid Solana wallet address") }))
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await ensureProfile(context.userId);
+    await sql`
+      update profiles
+      set payout_wallet_address = ${data.walletAddress}, payout_wallet_status = 'pending', payout_wallet_verified_at = null
       where user_id = ${context.userId}
     `;
     return getProfileRow(context.userId);
@@ -716,6 +754,76 @@ export const adminReviewPayoutProof = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+export const adminReviewPayoutWallet = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ userId: z.string(), action: z.enum(["verify", "reject"]) }))
+  .handler(async ({ context, data }) => {
+    await requireAdmin(context.userId);
+    const sql = await getSql();
+    const status = data.action === "verify" ? "verified" : "rejected";
+    await sql`
+      update profiles set payout_wallet_status = ${status}, payout_wallet_verified_at = ${data.action === "verify" ? new Date().toISOString() : null}
+      where user_id = ${data.userId} and payout_wallet_address is not null
+    `;
+    return { ok: true };
+  });
+
+export const adminPrepareUsd1Batch = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }): Promise<PayoutBatch> => {
+    await requireAdmin(context.userId);
+    if (new Date().getDay() !== 5) throw new Error("USD1 payout batches are prepared every Friday");
+    const sql = await getSql();
+    const batchDate = new Date().toISOString().slice(0, 10);
+    const existing = await sql<Record<string, unknown>>`
+      select * from payout_batches where batch_date = ${batchDate}
+    `;
+    if (existing[0]) return mapPayoutBatch(existing[0]);
+    const eligible = await sql<Record<string, unknown>>`
+      select s.id, s.user_id, s.estimated_payout, p.payout_wallet_address
+      from submissions s
+      join profiles p on p.user_id = s.user_id
+      where s.status = 'approved'
+        and s.payout_proof_status = 'accepted'
+        and p.payout_wallet_status = 'verified'
+        and p.payout_wallet_address is not null
+        and not exists (select 1 from payouts x where x.submission_id = s.id)
+        and not exists (select 1 from payout_items i where i.submission_id = s.id)
+      order by s.id
+    `;
+    const totalUnits = eligible.reduce((sum, row) => sum + Math.round(num(row.estimated_payout) * 10 ** USD1_DECIMALS), 0);
+    const batchRows = await sql<Record<string, unknown>>`
+      insert into payout_batches (batch_date, asset, network, token_mint, token_decimals, status, total_units, item_count, created_by)
+      values (${batchDate}, 'USD1', ${USD1_NETWORK}, ${USD1_SOLANA_MINT}, ${USD1_DECIMALS}, 'draft', ${totalUnits}, ${eligible.length}, ${context.userId})
+      returning *
+    `;
+    const batchId = num(batchRows[0].id);
+    for (const row of eligible) {
+      const amountUnits = Math.round(num(row.estimated_payout) * 10 ** USD1_DECIMALS);
+      await sql`
+        insert into payout_items (batch_id, submission_id, user_id, wallet_address, amount_units, token_mint, idempotency_key)
+        values (${batchId}, ${num(row.id)}, ${String(row.user_id)}, ${String(row.payout_wallet_address)}, ${amountUnits}, ${USD1_SOLANA_MINT}, ${`vuze:usd1:payout:${num(row.id)}`})
+      `;
+    }
+    return mapPayoutBatch(batchRows[0]);
+  });
+
+export const adminApproveUsd1Batch = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ batchId: z.number() }))
+  .handler(async ({ context, data }): Promise<PayoutBatch> => {
+    await requireAdmin(context.userId);
+    const sql = await getSql();
+    const rows = await sql<Record<string, unknown>>`
+      update payout_batches
+      set status = 'approved', approved_by = ${context.userId}, approved_at = now()
+      where id = ${data.batchId} and status = 'draft'
+      returning *
+    `;
+    if (!rows[0]) throw new Error("Batch is missing or already approved");
+    return mapPayoutBatch(rows[0]);
+  });
+
 export const adminMarkPaid = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(
@@ -792,6 +900,7 @@ export const adminListCreators = createServerFn({ method: "GET" })
       select p.*,
         (select count(*)::int from submissions s where s.user_id = p.user_id) as submissions,
         (select coalesce(sum(amount),0)::text from payouts x where x.user_id = p.user_id) as earned
+        , p.payout_wallet_address, p.payout_wallet_status
       from profiles p
       order by p.created_at desc
     `;
@@ -804,6 +913,8 @@ export const adminListCreators = createServerFn({ method: "GET" })
       suspended: Boolean(r.suspended),
       submissions: num(r.submissions),
       earned: num(r.earned),
+      payoutWalletAddress: r.payout_wallet_address ? String(r.payout_wallet_address) : null,
+      payoutWalletStatus: String(r.payout_wallet_status ?? "not_set"),
     }));
   });
 

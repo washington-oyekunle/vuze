@@ -9,6 +9,7 @@ export type SubmissionStatus =
 export type PayoutProofStatus = "none" | "pending" | "accepted" | "rejected";
 export type ApplicationStatus = "pending" | "accepted" | "declined" | "withdrawn";
 export type ProfileRole = "creator" | "admin";
+export type PayoutWalletStatus = "not_set" | "pending" | "verified" | "rejected";
 
 export type Profile = {
   userId: string;
@@ -21,6 +22,22 @@ export type Profile = {
   role: ProfileRole;
   organicVerified: boolean;
   suspended: boolean;
+  payoutWalletAddress: string | null;
+  payoutWalletStatus: PayoutWalletStatus;
+  payoutWalletVerifiedAt: string | null;
+};
+
+export type PayoutBatch = {
+  id: number;
+  batchDate: string;
+  asset: "USD1";
+  network: "solana-mainnet";
+  tokenMint: string;
+  tokenDecimals: number;
+  status: "draft" | "approved" | "processing" | "paid" | "failed";
+  totalUnits: number;
+  itemCount: number;
+  createdAt: string;
 };
 
 export type Campaign = {

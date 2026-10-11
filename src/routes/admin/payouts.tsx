@@ -3,7 +3,7 @@ import { AppShell, PageHeader } from "@/components/app-shell";
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { adminListPayouts, adminMarkPaid, adminReviewPayoutProof, getMyProfile } from "@/lib/vuze/server";
+import { adminApproveUsd1Batch, adminListPayouts, adminMarkPaid, adminPrepareUsd1Batch, adminReviewPayoutProof, getMyProfile } from "@/lib/vuze/server";
 import { money } from "@/lib/utils";
 import { format } from "date-fns";
 import { useState } from "react";
@@ -25,6 +25,10 @@ function AdminPayouts() {
   const [references, setReferences] = useState<Record<number, string>>({});
   const [payingId, setPayingId] = useState<number | null>(null);
   const [reviewingId, setReviewingId] = useState<number | null>(null);
+  const [preparingBatch, setPreparingBatch] = useState(false);
+  const [batchMessage, setBatchMessage] = useState("");
+  const [batchId, setBatchId] = useState<number | null>(null);
+  const [approvingBatch, setApprovingBatch] = useState(false);
 
   if (isPending) return <AppShell><p className="text-sm text-muted-foreground">Loading…</p></AppShell>;
   if (!user) return <RedirectToSignIn to="/login" />;
@@ -56,9 +60,37 @@ function AdminPayouts() {
     }
   }
 
+  async function prepareBatch() {
+    setPreparingBatch(true);
+    try {
+      const batch = await adminPrepareUsd1Batch();
+      setBatchId(batch.id);
+      setBatchMessage(`USD1 batch #${batch.id} ready with ${batch.itemCount} videos (${(batch.totalUnits / 10 ** batch.tokenDecimals).toFixed(2)} USD1).`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not prepare USD1 batch");
+    } finally {
+      setPreparingBatch(false);
+    }
+  }
+
+  async function approveBatch() {
+    if (!batchId) return;
+    setApprovingBatch(true);
+    try {
+      const batch = await adminApproveUsd1Batch({ data: { batchId } });
+      setBatchMessage(`USD1 batch #${batch.id} approved for transfer execution. The transfer worker or Squads treasury must now execute it.`);
+      toast.success("USD1 batch approved");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not approve batch");
+    } finally {
+      setApprovingBatch(false);
+    }
+  }
+
   return (
     <AppShell>
-      <PageHeader title="Payouts" description="Manual admin payout run every Friday. Creators submit links for tracking, then upload Friday analytics proof only for videos they want paid. Authenticate the proof before marking a video paid." />
+      <PageHeader title="Payouts" description="Manual USD1 payout run every Friday. Creators submit links for tracking, then upload Friday analytics proof only for videos they want paid. Authenticate the proof before preparing or paying the batch." action={<Button onClick={() => void prepareBatch()} disabled={preparingBatch}>{preparingBatch ? "Preparing…" : "Prepare USD1 batch"}</Button>} />
+      {batchMessage ? <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-secondary p-3 text-sm"><span>{batchMessage}</span>{batchId ? <Button size="sm" variant="outline" onClick={() => void approveBatch()} disabled={approvingBatch}>{approvingBatch ? "Approving…" : "Approve batch"}</Button> : null}</div> : null}
       <h2 className="mb-2 text-sm text-muted-foreground">Approved, unpaid</h2>
       <div className="mb-8 overflow-hidden rounded-xl border border-border">
         {(q.data?.pending ?? []).length === 0 ? (
