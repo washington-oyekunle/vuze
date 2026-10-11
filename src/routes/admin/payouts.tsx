@@ -3,7 +3,7 @@ import { AppShell, PageHeader } from "@/components/app-shell";
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { adminListPayouts, adminMarkPaid, getMyProfile } from "@/lib/vuze/server";
+import { adminListPayouts, adminMarkPaid, adminReviewPayoutProof, getMyProfile } from "@/lib/vuze/server";
 import { money } from "@/lib/utils";
 import { format } from "date-fns";
 import { useState } from "react";
@@ -24,6 +24,7 @@ function AdminPayouts() {
   const queryClient = useQueryClient();
   const [references, setReferences] = useState<Record<number, string>>({});
   const [payingId, setPayingId] = useState<number | null>(null);
+  const [reviewingId, setReviewingId] = useState<number | null>(null);
 
   if (isPending) return <AppShell><p className="text-sm text-muted-foreground">Loading…</p></AppShell>;
   if (!user) return <RedirectToSignIn to="/login" />;
@@ -42,9 +43,22 @@ function AdminPayouts() {
     }
   }
 
+  async function reviewProof(submissionId: number, action: "accept" | "reject") {
+    setReviewingId(submissionId);
+    try {
+      await adminReviewPayoutProof({ data: { submissionId, action } });
+      toast.success(action === "accept" ? "Analytics proof authenticated" : "Analytics proof rejected");
+      await queryClient.invalidateQueries({ queryKey: ["admin-payouts"] });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not review proof");
+    } finally {
+      setReviewingId(null);
+    }
+  }
+
   return (
     <AppShell>
-      <PageHeader title="Payouts" description="Manual admin payout run every Friday. VUZE never sends money automatically. Only approved videos with analytics screen-recording proof appear here, and each video can be paid once." />
+      <PageHeader title="Payouts" description="Manual admin payout run every Friday. Creators submit links for tracking, then upload Friday analytics proof only for videos they want paid. Authenticate the proof before marking a video paid." />
       <h2 className="mb-2 text-sm text-muted-foreground">Approved, unpaid</h2>
       <div className="mb-8 overflow-hidden rounded-xl border border-border">
         {(q.data?.pending ?? []).length === 0 ? (
@@ -59,19 +73,22 @@ function AdminPayouts() {
                   className="min-w-0 hover:underline"
                 >
                   <span className="block truncate">{s.creatorName} · {s.campaignTitle}</span>
-                  <span className="text-xs text-muted-foreground tabular-nums">{money(s.estimatedPayout)} · proof uploaded</span>
+                  <span className="text-xs text-muted-foreground tabular-nums">{money(s.estimatedPayout)} · proof {s.payoutProofStatus}</span>
                 </Link>
                 <div className="flex items-center gap-2">
-                  <Input
-                    className="h-9 w-36"
-                    aria-label={`Payment reference for ${s.creatorName}`}
-                    placeholder="Reference"
-                    value={references[s.id] ?? ""}
-                    onChange={(event) => setReferences((current) => ({ ...current, [s.id]: event.target.value }))}
-                  />
-                  <Button size="sm" onClick={() => void markPaid(s.id)} disabled={payingId === s.id}>
-                    {payingId === s.id ? "Saving…" : "Mark paid"}
-                  </Button>
+                  {s.payoutProofStatus === "pending" ? (
+                    <>
+                      <Button size="sm" variant="outline" onClick={() => void reviewProof(s.id, "reject")} disabled={reviewingId === s.id}>Reject proof</Button>
+                      <Button size="sm" onClick={() => void reviewProof(s.id, "accept")} disabled={reviewingId === s.id}>Authenticate proof</Button>
+                    </>
+                  ) : (
+                    <>
+                      <Input className="h-9 w-36" aria-label={`Payment reference for ${s.creatorName}`} placeholder="Reference" value={references[s.id] ?? ""} onChange={(event) => setReferences((current) => ({ ...current, [s.id]: event.target.value }))} />
+                      <Button size="sm" onClick={() => void markPaid(s.id)} disabled={payingId === s.id || s.payoutProofStatus !== "accepted"}>
+                        {payingId === s.id ? "Saving…" : "Mark paid"}
+                      </Button>
+                    </>
+                  )}
                 </div>
               </li>
             ))}

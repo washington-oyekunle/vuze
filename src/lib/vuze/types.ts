@@ -6,6 +6,7 @@ export type SubmissionStatus =
   | "approved"
   | "rejected"
   | "paid";
+export type PayoutProofStatus = "none" | "pending" | "accepted" | "rejected";
 export type ApplicationStatus = "pending" | "accepted" | "declined" | "withdrawn";
 export type ProfileRole = "creator" | "admin";
 
@@ -75,6 +76,8 @@ export type Submission = {
   estimatedPayout: number;
   adminNotes: string;
   payoutProofUrl: string;
+  payoutProofStatus: PayoutProofStatus;
+  payoutProofAdminNotes: string;
   flagged: boolean;
   createdAt: string;
   reviewedAt: string | null;

@@ -74,6 +74,8 @@ function mapSubmission(r: Record<string, unknown>): Submission {
     estimatedPayout: num(r.estimated_payout),
     adminNotes: String(r.admin_notes ?? ""),
     payoutProofUrl: String(r.payout_proof_url ?? ""),
+    payoutProofStatus: (r.payout_proof_status ?? "none") as Submission["payoutProofStatus"],
+    payoutProofAdminNotes: String(r.payout_proof_admin_notes ?? ""),
     flagged: Boolean(r.flagged),
     createdAt: String(r.created_at),
     reviewedAt: r.reviewed_at ? String(r.reviewed_at) : null,
@@ -418,13 +420,14 @@ export const submitPayoutProof = createServerFn({ method: "POST" })
   .validator(z.object({ id: z.number(), payoutProofUrl: z.string().url() }))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
+    if (new Date().getDay() !== 5) throw new Error("Analytics screen recordings are submitted on Friday");
     const rows = await sql<Record<string, unknown>>`
       select id, status from submissions where id = ${data.id} and user_id = ${context.userId}
     `;
     if (!rows[0]) throw new Error("Submission not found");
     if (String(rows[0].status) !== "approved") throw new Error("Payout proof is available after approval");
     await sql`
-      update submissions set payout_proof_url = ${data.payoutProofUrl}
+      update submissions set payout_proof_url = ${data.payoutProofUrl}, payout_proof_status = 'pending', payout_proof_reviewed_at = null, payout_proof_admin_notes = ''
       where id = ${data.id} and user_id = ${context.userId}
     `;
     return { ok: true };
@@ -696,6 +699,23 @@ export const adminReviewSubmission = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+export const adminReviewPayoutProof = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ submissionId: z.number(), action: z.enum(["accept", "reject"]), notes: z.string().max(600).optional() }))
+  .handler(async ({ context, data }) => {
+    await requireAdmin(context.userId);
+    const sql = await getSql();
+    const status = data.action === "accept" ? "accepted" : "rejected";
+    const rows = await sql<{ id: number }>`
+      update submissions
+      set payout_proof_status = ${status}, payout_proof_reviewed_at = now(), payout_proof_admin_notes = ${data.notes ?? ""}
+      where id = ${data.submissionId} and status = 'approved' and payout_proof_url <> ''
+      returning id
+    `;
+    if (!rows[0]) throw new Error("Payout proof not found or video is not approved");
+    return { ok: true };
+  });
+
 export const adminMarkPaid = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(
@@ -709,12 +729,13 @@ export const adminMarkPaid = createServerFn({ method: "POST" })
     if (new Date().getDay() !== 5) throw new Error("Payouts are processed every Friday");
     const sql = await getSql();
     const rows = await sql<Record<string, unknown>>`
-      select id, user_id, estimated_payout, status, payout_proof_url from submissions where id = ${data.submissionId}
+      select id, user_id, estimated_payout, status, payout_proof_url, payout_proof_status from submissions where id = ${data.submissionId}
     `;
     const s = rows[0];
     if (!s) throw new Error("Not found");
     if (String(s.status) !== "approved") throw new Error("Only approved submissions can be paid");
     if (!String(s.payout_proof_url ?? "")) throw new Error("Creator must submit an analytics screen recording before payout");
+    if (String(s.payout_proof_status) !== "accepted") throw new Error("Admin must authenticate the analytics recording before payout");
     const alreadyPaid = await sql<{ c: number }>`select count(*)::int as c from payouts where submission_id = ${data.submissionId}`;
     if (num(alreadyPaid[0]?.c) > 0) throw new Error("This video has already been paid");
     await sql`
@@ -744,7 +765,7 @@ export const adminListPayouts = createServerFn({ method: "GET" })
        from submissions s
        join campaigns c on c.id = s.campaign_id
        join profiles p on p.user_id = s.user_id
-       where s.status = 'approved' and s.payout_proof_url <> ''
+       where s.status = 'approved' and s.payout_proof_url <> '' and s.status <> 'paid'
        order by s.reviewed_at desc`,
     );
     return {

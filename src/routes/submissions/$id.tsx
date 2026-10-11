@@ -151,10 +151,20 @@ function SubmissionDetail() {
             <form className="grid gap-3" onSubmit={onPayoutProof}>
               <div>
                 <h2 className="text-sm font-medium">Request payout</h2>
-                <p className="mt-1 text-sm text-muted-foreground">Upload a screen recording of the platform analytics for this post. MP4, WebM, or MOV up to 100 MB. Payouts are processed every Friday. A video can only be paid once.</p>
+                <p className="mt-1 text-sm text-muted-foreground">Submit a screen recording on Friday only for this tracked video if you want it paid. MP4, WebM, or MOV up to 100 MB. An admin authenticates the proof before manual payment.</p>
               </div>
-              {s.payoutProofUrl ? (
-                <a href={s.payoutProofUrl} target="_blank" rel="noreferrer" className="text-sm underline">View submitted analytics recording</a>
+              {s.payoutProofStatus === "pending" ? (
+                <p className="text-sm text-muted-foreground">Analytics proof submitted. Waiting for the admin to authenticate it.</p>
+              ) : s.payoutProofStatus === "accepted" ? (
+                <p className="text-sm text-muted-foreground">Analytics proof authenticated. Your video is ready for the Friday manual payout run.</p>
+              ) : s.payoutProofStatus === "rejected" ? (
+                <>
+                  <p className="text-sm text-destructive">The admin could not authenticate this recording{s.payoutProofAdminNotes ? `: ${s.payoutProofAdminNotes}` : "."} Upload a new recording on the next Friday payout window.</p>
+                  <Label htmlFor="payout-proof">New analytics screen recording</Label>
+                  <Input id="payout-proof" type="file" required accept="video/mp4,video/webm,video/quicktime" onChange={(e) => setPayoutProofFile(e.target.files?.[0] ?? null)} />
+                  {payoutProofFile ? <p className="text-xs text-muted-foreground">Selected: {payoutProofFile.name}</p> : null}
+                  <Button type="submit" disabled={uploadingProof}>{uploadingProof ? "Uploading…" : "Submit new Friday proof"}</Button>
+                </>
               ) : (
                 <>
                   <Label htmlFor="payout-proof">Analytics screen recording</Label>
