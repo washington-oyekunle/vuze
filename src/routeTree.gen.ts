@@ -23,6 +23,7 @@ import { Route as AdminCampaignsRouteImport } from './routes/admin/campaigns'
 import { Route as AdminCreatorsRouteImport } from './routes/admin/creators'
 import { Route as AdminPayoutsRouteImport } from './routes/admin/payouts'
 import { Route as AdminSubmissionsRouteImport } from './routes/admin/submissions'
+import { Route as ApiAnalyticsProofRouteImport } from './routes/api/analytics-proof'
 import { Route as CampaignsIndexRouteImport } from './routes/campaigns/index'
 import { Route as CampaignsIdRouteImport } from './routes/campaigns/$id'
 import { Route as GuidesIndexRouteImport } from './routes/guides/index'
@@ -103,6 +104,11 @@ const AdminSubmissionsRoute = AdminSubmissionsRouteImport.update({
   path: '/admin/submissions',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAnalyticsProofRoute = ApiAnalyticsProofRouteImport.update({
+  id: '/api/analytics-proof',
+  path: '/api/analytics-proof',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CampaignsIndexRoute = CampaignsIndexRouteImport.update({
   id: '/campaigns/',
   path: '/campaigns/',
@@ -163,6 +169,7 @@ export interface FileRoutesByFullPath {
   '/admin/creators': typeof AdminCreatorsRoute
   '/admin/payouts': typeof AdminPayoutsRoute
   '/admin/submissions': typeof AdminSubmissionsRouteWithChildren
+  '/api/analytics-proof': typeof ApiAnalyticsProofRoute
   '/campaigns/$id': typeof CampaignsIdRoute
   '/guides/$slug': typeof GuidesSlugRoute
   '/submissions/$id': typeof SubmissionsIdRoute
@@ -188,6 +195,7 @@ export interface FileRoutesByTo {
   '/admin/creators': typeof AdminCreatorsRoute
   '/admin/payouts': typeof AdminPayoutsRoute
   '/admin/submissions': typeof AdminSubmissionsRouteWithChildren
+  '/api/analytics-proof': typeof ApiAnalyticsProofRoute
   '/campaigns/$id': typeof CampaignsIdRoute
   '/guides/$slug': typeof GuidesSlugRoute
   '/submissions/$id': typeof SubmissionsIdRoute
@@ -214,6 +222,7 @@ export interface FileRoutesById {
   '/admin/creators': typeof AdminCreatorsRoute
   '/admin/payouts': typeof AdminPayoutsRoute
   '/admin/submissions': typeof AdminSubmissionsRouteWithChildren
+  '/api/analytics-proof': typeof ApiAnalyticsProofRoute
   '/campaigns/$id': typeof CampaignsIdRoute
   '/guides/$slug': typeof GuidesSlugRoute
   '/submissions/$id': typeof SubmissionsIdRoute
@@ -241,6 +250,7 @@ export interface FileRouteTypes {
     | '/admin/creators'
     | '/admin/payouts'
     | '/admin/submissions'
+    | '/api/analytics-proof'
     | '/campaigns/$id'
     | '/guides/$slug'
     | '/submissions/$id'
@@ -266,6 +276,7 @@ export interface FileRouteTypes {
     | '/admin/creators'
     | '/admin/payouts'
     | '/admin/submissions'
+    | '/api/analytics-proof'
     | '/campaigns/$id'
     | '/guides/$slug'
     | '/submissions/$id'
@@ -291,6 +302,7 @@ export interface FileRouteTypes {
     | '/admin/creators'
     | '/admin/payouts'
     | '/admin/submissions'
+    | '/api/analytics-proof'
     | '/campaigns/$id'
     | '/guides/$slug'
     | '/submissions/$id'
@@ -317,6 +329,7 @@ export interface RootRouteChildren {
   AdminCreatorsRoute: typeof AdminCreatorsRoute
   AdminPayoutsRoute: typeof AdminPayoutsRoute
   AdminSubmissionsRoute: typeof AdminSubmissionsRouteWithChildren
+  ApiAnalyticsProofRoute: typeof ApiAnalyticsProofRoute
   CampaignsIdRoute: typeof CampaignsIdRoute
   GuidesSlugRoute: typeof GuidesSlugRoute
   SubmissionsIdRoute: typeof SubmissionsIdRoute
@@ -428,6 +441,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminSubmissionsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/analytics-proof': {
+      id: '/api/analytics-proof'
+      path: '/api/analytics-proof'
+      fullPath: '/api/analytics-proof'
+      preLoaderRoute: typeof ApiAnalyticsProofRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/campaigns/': {
       id: '/campaigns/'
       path: '/campaigns'
@@ -519,6 +539,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminCreatorsRoute: AdminCreatorsRoute,
   AdminPayoutsRoute: AdminPayoutsRoute,
   AdminSubmissionsRoute: AdminSubmissionsRouteWithChildren,
+  ApiAnalyticsProofRoute: ApiAnalyticsProofRoute,
   CampaignsIdRoute: CampaignsIdRoute,
   GuidesSlugRoute: GuidesSlugRoute,
   SubmissionsIdRoute: SubmissionsIdRoute,

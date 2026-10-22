@@ -35,6 +35,7 @@ export interface Sql {
     text: string,
     params?: unknown[],
   ): Promise<T[]>;
+  transaction<T>(work: (sql: Sql) => Promise<T>): Promise<T>;
 }
 
 /**
@@ -70,18 +71,29 @@ const identity = (v: string) => v;
 type Run = <T>(text: string, params: unknown[]) => Promise<T[]>;
 
 /** Wrap a query runner in the tagged-template + `.query()` `Sql` surface. */
-function toSql(run: Run): Sql {
+function toSql(
+  run: Run,
+  transact?: <T>(work: (sql: Sql) => Promise<T>) => Promise<T>,
+): Sql {
   const sql = (async <T = Record<string, unknown>>(
     strings: TemplateStringsArray,
     ...values: unknown[]
   ): Promise<T[]> => {
     // Rebuild with $1, $2, … placeholders so values stay parameterized.
     let text = strings[0];
-    for (let i = 0; i < values.length; i += 1) text += `$${i + 1}${strings[i + 1]}`;
+    for (let i = 0; i < values.length; i += 1)
+      text += `$${i + 1}${strings[i + 1]}`;
     return run<T>(text, values);
   }) as unknown as Sql;
-  sql.query = <T = Record<string, unknown>>(text: string, params: unknown[] = []) =>
-    run<T>(text, params);
+  sql.query = <T = Record<string, unknown>>(
+    text: string,
+    params: unknown[] = [],
+  ) => run<T>(text, params);
+  sql.transaction =
+    transact ??
+    (async () => {
+      throw new Error("Nested transactions are not supported");
+    });
   return sql;
 }
 
@@ -94,10 +106,31 @@ function createNeonSql(): Promise<Sql> {
     types.setTypeParser(OID_DATE, identity);
     types.setTypeParser(OID_INTERVAL, identity);
     const pool = new Pool({ connectionString: databaseUrl });
-    return toSql(async <T>(text: string, params: unknown[]) => {
-      const res = await pool.query(text, params);
-      return res.rows as T[];
-    });
+    return toSql(
+      async <T>(text: string, params: unknown[]) => {
+        const res = await pool.query(text, params);
+        return res.rows as T[];
+      },
+      async (work) => {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          const result = await work(
+            toSql(
+              async <T>(text: string, params: unknown[]) =>
+                (await client.query(text, params)).rows as T[],
+            ),
+          );
+          await client.query("COMMIT");
+          return result;
+        } catch (error) {
+          await client.query("ROLLBACK");
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+    );
   })().catch((err) => {
     globalRef.__pgSqlPromise__ = undefined;
     throw err;
@@ -146,7 +179,10 @@ async function createPgliteSql(): Promise<Sql> {
       "select name from _migrations",
     );
     const done = doneRows.rows.map((r) => r.name);
-    for (const { name, path } of pendingMigrations(Object.keys(migrations), done)) {
+    for (const { name, path } of pendingMigrations(
+      Object.keys(migrations),
+      done,
+    )) {
       // Apply + record atomically (parity with scripts/migrate.mjs) so a failed
       // statement can't leave a file half-applied but untracked.
       await pg.transaction(async (tx) => {
@@ -161,10 +197,21 @@ async function createPgliteSql(): Promise<Sql> {
   globalRef.__pgliteMigrateChain__ = pass;
   await pass;
 
-  return toSql(async <T>(text: string, params: unknown[]) => {
-    const result = await pg.query<T>(text, params);
-    return result.rows;
-  });
+  return toSql(
+    async <T>(text: string, params: unknown[]) => {
+      const result = await pg.query<T>(text, params);
+      return result.rows;
+    },
+    async (work) =>
+      pg.transaction(async (tx) =>
+        work(
+          toSql(
+            async <T>(text: string, params: unknown[]) =>
+              (await tx.query<T>(text, params)).rows,
+          ),
+        ),
+      ),
+  );
 }
 
 let sqlPromise: Promise<Sql> | null = null;
@@ -199,9 +246,13 @@ export function getSql(): Promise<Sql> {
  * Lets Better Auth persist to the SAME embedded DB as app data in preview (via a
  * Kysely dialect). Throws when `DATABASE_URL` is set (that path uses Neon).
  */
-export async function getPglite(): Promise<import("@electric-sql/pglite").PGlite> {
+export async function getPglite(): Promise<
+  import("@electric-sql/pglite").PGlite
+> {
   if (dbSource !== "pglite") {
-    throw new Error("getPglite() is only available on the PGLite fallback (no DATABASE_URL)");
+    throw new Error(
+      "getPglite() is only available on the PGLite fallback (no DATABASE_URL)",
+    );
   }
   await getSql();
   const pg = await globalRef.__pgliteInstance__;

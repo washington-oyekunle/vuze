@@ -1,15 +1,20 @@
 export type CampaignType = "ugc" | "clipping";
 export type CampaignStatus = "draft" | "live" | "closed";
 export type SubmissionStatus =
+  | "verifying"
+  | "verification_failed"
+  | "payment_processing"
   | "under_review"
   | "needs_proof"
   | "approved"
   | "rejected"
   | "paid";
 export type PayoutProofStatus = "none" | "pending" | "accepted" | "rejected";
-export type ApplicationStatus = "pending" | "accepted" | "declined" | "withdrawn";
+export type ApplicationStatus =
+  "pending" | "accepted" | "declined" | "withdrawn";
 export type ProfileRole = "creator" | "admin";
-export type PayoutWalletStatus = "not_set" | "pending" | "verified" | "rejected";
+export type PayoutWalletStatus =
+  "not_set" | "pending" | "verified" | "rejected";
 
 export type Profile = {
   userId: string;
@@ -56,6 +61,7 @@ export type Campaign = {
   organicOnly: boolean;
   maxSubmissions: number | null;
   submissionCount: number;
+  minViews: number;
 };
 
 export type CampaignApplication = {
@@ -83,6 +89,13 @@ export type Submission = {
   platform: string;
   notes: string;
   analyticsUrls: string;
+  analyticsProofUrl: string;
+  analyticsProofType: string;
+  verificationStatus: "pending" | "verified" | "unavailable";
+  verificationReason: string;
+  verificationSource: string;
+  verifiedAt: string | null;
+  minViews: number;
   views: number;
   watchTimePct: number | null;
   retentionPct: number | null;

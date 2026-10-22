@@ -3,6 +3,12 @@ import { z } from "zod";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql } from "@/lib/db";
 import { num } from "@/lib/utils";
+import {
+  createSubmission,
+  retryVerification,
+  reviewSubmission,
+} from "./submission-service.server";
+import { getPayoutReadiness, paySubmission } from "./payout-service.server";
 import type {
   AdminOverview,
   AssetItem,
@@ -38,6 +44,7 @@ function mapCampaign(r: Record<string, unknown>): Campaign {
     organicOnly: Boolean(r.organic_only),
     maxSubmissions: r.max_submissions == null ? null : num(r.max_submissions),
     submissionCount: num(r.submission_count),
+    minViews: num(r.min_views ?? 1000),
   };
 }
 
@@ -69,6 +76,14 @@ function mapSubmission(r: Record<string, unknown>): Submission {
     platform: String(r.platform),
     notes: String(r.notes ?? ""),
     analyticsUrls: String(r.analytics_urls ?? ""),
+    analyticsProofUrl: String(r.analytics_proof_url ?? ""),
+    analyticsProofType: String(r.analytics_proof_type ?? ""),
+    verificationStatus: (r.verification_status ??
+      "pending") as Submission["verificationStatus"],
+    verificationReason: String(r.verification_reason ?? ""),
+    verificationSource: String(r.verification_source ?? ""),
+    verifiedAt: r.verified_at ? String(r.verified_at) : null,
+    minViews: num(r.min_views ?? 1000),
     views: num(r.views),
     watchTimePct: r.watch_time_pct == null ? null : num(r.watch_time_pct),
     retentionPct: r.retention_pct == null ? null : num(r.retention_pct),
@@ -79,7 +94,8 @@ function mapSubmission(r: Record<string, unknown>): Submission {
     estimatedPayout: num(r.estimated_payout),
     adminNotes: String(r.admin_notes ?? ""),
     payoutProofUrl: String(r.payout_proof_url ?? ""),
-    payoutProofStatus: (r.payout_proof_status ?? "none") as Submission["payoutProofStatus"],
+    payoutProofStatus: (r.payout_proof_status ??
+      "none") as Submission["payoutProofStatus"],
     payoutProofAdminNotes: String(r.payout_proof_admin_notes ?? ""),
     flagged: Boolean(r.flagged),
     createdAt: String(r.created_at),
@@ -100,27 +116,6 @@ function mapSubmissionReview(r: Record<string, unknown>): SubmissionReview {
   };
 }
 
-function mapPayoutBatch(r: Record<string, unknown>): PayoutBatch {
-  return {
-    id: num(r.id),
-    batchDate: String(r.batch_date),
-    asset: "USD1",
-    network: "solana-mainnet",
-    tokenMint: String(r.token_mint),
-    tokenDecimals: num(r.token_decimals),
-    status: r.status as PayoutBatch["status"],
-    totalUnits: num(r.total_units),
-    itemCount: num(r.item_count),
-    createdAt: String(r.created_at),
-  };
-}
-
-function estimatePayout(kind: string, rate: number, views: number) {
-  if (kind === "flat") return rate;
-  if (kind === "per_1k") return (views / 1000) * rate;
-  return 0;
-}
-
 async function ensureProfile(userId: string, displayName?: string) {
   const sql = await getSql();
   const existing = await sql<{ user_id: string; role: string }>`
@@ -129,8 +124,19 @@ async function ensureProfile(userId: string, displayName?: string) {
   if (existing[0]) {
     return existing[0];
   }
-  const admins = await sql<{ c: number }>`select count(*)::int as c from profiles where role = 'admin'`;
-  const role = num(admins[0]?.c) === 0 ? "admin" : "creator";
+  const admins = await sql<{
+    c: number;
+  }>`select count(*)::int as c from profiles where role = 'admin'`;
+  const configuredAdmins = (process.env.ADMIN_USER_IDS ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  const localDemo =
+    process.env.NODE_ENV !== "production" && !process.env.DATABASE_URL?.trim();
+  const role =
+    configuredAdmins.includes(userId) || (localDemo && num(admins[0]?.c) === 0)
+      ? "admin"
+      : "creator";
   const name = displayName?.trim() || "Creator";
   await sql`
     insert into profiles (user_id, display_name, role)
@@ -149,16 +155,18 @@ async function requireAdmin(userId: string) {
 const campaignSelect = `
   c.id, c.title, c.brand, c.type, c.status, c.summary, c.brief, c.requirements,
   c.payout_label, c.payout_kind, c.payout_rate, c.deadline, c.organic_only,
-  c.max_submissions, (select count(*)::int from submissions s where s.campaign_id = c.id) as submission_count
+  c.max_submissions, c.min_views, (select count(*)::int from submissions s where s.campaign_id = c.id) as submission_count
 `;
 
-export const listCampaigns = createServerFn({ method: "GET" }).handler(async () => {
-  const sql = await getSql();
-  const list = await sql.query<Record<string, unknown>>(
-    `select ${campaignSelect} from campaigns c order by case c.status when 'live' then 0 when 'draft' then 1 else 2 end, c.created_at desc`,
-  );
-  return list.map(mapCampaign);
-});
+export const listCampaigns = createServerFn({ method: "GET" }).handler(
+  async () => {
+    const sql = await getSql();
+    const list = await sql.query<Record<string, unknown>>(
+      `select ${campaignSelect} from campaigns c order by case c.status when 'live' then 0 when 'draft' then 1 else 2 end, c.created_at desc`,
+    );
+    return list.map(mapCampaign);
+  },
+);
 
 export const getCampaign = createServerFn({ method: "GET" })
   .validator(z.object({ id: z.number() }))
@@ -210,18 +218,22 @@ export const listMyApplications = createServerFn({ method: "GET" })
 
 export const applyToCampaign = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator(z.object({ campaignId: z.number(), pitch: z.string().max(800).optional() }))
+  .validator(
+    z.object({ campaignId: z.number(), pitch: z.string().max(800).optional() }),
+  )
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     await ensureProfile(context.userId);
     const profile = await getProfileRow(context.userId);
-    if (profile?.suspended) throw new Error("This account is suspended from campaigns");
+    if (profile?.suspended)
+      throw new Error("This account is suspended from campaigns");
 
     const campaigns = await sql<Record<string, unknown>>`
       select id, status from campaigns where id = ${data.campaignId}
     `;
     if (!campaigns[0]) throw new Error("Campaign not found");
-    if (String(campaigns[0].status) !== "live") throw new Error("This campaign is no longer accepting applications");
+    if (String(campaigns[0].status) !== "live")
+      throw new Error("This campaign is no longer accepting applications");
 
     const existing = await sql<{ id: number; status: string }>`
       select id, status from campaign_applications
@@ -276,9 +288,14 @@ async function getProfileRow(userId: string): Promise<Profile | null> {
     role: r.role as Profile["role"],
     organicVerified: Boolean(r.organic_verified),
     suspended: Boolean(r.suspended),
-    payoutWalletAddress: r.payout_wallet_address ? String(r.payout_wallet_address) : null,
-    payoutWalletStatus: (r.payout_wallet_status ?? "not_set") as Profile["payoutWalletStatus"],
-    payoutWalletVerifiedAt: r.payout_wallet_verified_at ? String(r.payout_wallet_verified_at) : null,
+    payoutWalletAddress: r.payout_wallet_address
+      ? String(r.payout_wallet_address)
+      : null,
+    payoutWalletStatus: (r.payout_wallet_status ??
+      "not_set") as Profile["payoutWalletStatus"],
+    payoutWalletVerifiedAt: r.payout_wallet_verified_at
+      ? String(r.payout_wallet_verified_at)
+      : null,
   };
 }
 
@@ -319,7 +336,16 @@ export const updateMyProfile = createServerFn({ method: "POST" })
 
 export const updatePayoutWallet = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator(z.object({ walletAddress: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "Enter a valid Solana wallet address") }))
+  .validator(
+    z.object({
+      walletAddress: z
+        .string()
+        .regex(
+          /^[1-9A-HJ-NP-Za-km-z]{32,44}$/,
+          "Enter a valid Solana wallet address",
+        ),
+    }),
+  )
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     await ensureProfile(context.userId);
@@ -333,92 +359,71 @@ export const updatePayoutWallet = createServerFn({ method: "POST" })
 
 export const getDashboard = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .handler(async ({ context }): Promise<{ stats: DashboardStats; recent: Submission[]; live: Campaign[] }> => {
-    await ensureProfile(context.userId);
-    const sql = await getSql();
-    const pending = await sql<{ c: number }>`select count(*)::int as c from submissions where user_id = ${context.userId} and status in ('under_review', 'needs_proof')`;
-    const approved = await sql<{ c: number }>`select count(*)::int as c from submissions where user_id = ${context.userId} and status in ('approved', 'paid')`;
-    const earned = await sql<{ s: string }>`select coalesce(sum(amount),0)::text as s from payouts where user_id = ${context.userId}`;
-    const pendingPay = await sql<{ s: string }>`select coalesce(sum(estimated_payout),0)::text as s from submissions where user_id = ${context.userId} and status = 'approved'`;
-    const liveCount = await sql<{ c: number }>`select count(*)::int as c from campaigns where status = 'live'`;
-    const recentRows = await sql.query<Record<string, unknown>>(
-      `select s.*, c.title as campaign_title, c.brand as campaign_brand, p.display_name as creator_name
+  .handler(
+    async ({
+      context,
+    }): Promise<{
+      stats: DashboardStats;
+      recent: Submission[];
+      live: Campaign[];
+    }> => {
+      await ensureProfile(context.userId);
+      const sql = await getSql();
+      const pending = await sql<{
+        c: number;
+      }>`select count(*)::int as c from submissions where user_id = ${context.userId} and status in ('verifying', 'verification_failed', 'under_review', 'needs_proof', 'payment_processing')`;
+      const approved = await sql<{
+        c: number;
+      }>`select count(*)::int as c from submissions where user_id = ${context.userId} and status in ('approved', 'paid')`;
+      const earned = await sql<{
+        s: string;
+      }>`select coalesce(sum(amount),0)::text as s from payouts where user_id = ${context.userId}`;
+      const pendingPay = await sql<{
+        s: string;
+      }>`select coalesce(sum(estimated_payout),0)::text as s from submissions where user_id = ${context.userId} and status = 'approved'`;
+      const liveCount = await sql<{
+        c: number;
+      }>`select count(*)::int as c from campaigns where status = 'live'`;
+      const recentRows = await sql.query<Record<string, unknown>>(
+        `select s.*, c.title as campaign_title, c.brand as campaign_brand, p.display_name as creator_name
        from submissions s
        join campaigns c on c.id = s.campaign_id
        join profiles p on p.user_id = s.user_id
        where s.user_id = $1
        order by s.created_at desc limit 6`,
-      [context.userId],
-    );
-    const liveRows = await sql.query<Record<string, unknown>>(
-      `select ${campaignSelect} from campaigns c where c.status = 'live' order by c.created_at desc`,
-    );
-    return {
-      stats: {
-        activeCampaigns: num(liveCount[0]?.c),
-        pending: num(pending[0]?.c),
-        approved: num(approved[0]?.c),
-        earned: num(earned[0]?.s),
-        pendingPay: num(pendingPay[0]?.s),
-      },
-      recent: recentRows.map(mapSubmission),
-      live: liveRows.map(mapCampaign),
-    };
-  });
+        [context.userId],
+      );
+      const liveRows = await sql.query<Record<string, unknown>>(
+        `select ${campaignSelect} from campaigns c where c.status = 'live' order by c.created_at desc`,
+      );
+      return {
+        stats: {
+          activeCampaigns: num(liveCount[0]?.c),
+          pending: num(pending[0]?.c),
+          approved: num(approved[0]?.c),
+          earned: num(earned[0]?.s),
+          pendingPay: num(pendingPay[0]?.s),
+        },
+        recent: recentRows.map(mapSubmission),
+        live: liveRows.map(mapCampaign),
+      };
+    },
+  );
 
 const submitSchema = z.object({
-  campaignId: z.number(),
+  campaignId: z.number().int().positive(),
   postUrl: z.string().url(),
-  platform: z.string().min(2),
+  platform: z.enum(["youtube", "tiktok", "instagram"]),
   notes: z.string().max(800).optional(),
-  analyticsUrls: z.string().max(1200).optional(),
-  views: z.number().int().min(0),
-  watchTimePct: z.number().min(0).max(100).optional(),
-  retentionPct: z.number().min(0).max(100).optional(),
-  likes: z.number().int().min(0),
-  commentsCount: z.number().int().min(0),
-  shares: z.number().int().min(0),
+  proofUploadId: z.string().uuid(),
 });
 
 export const submitClip = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(submitSchema)
   .handler(async ({ context, data }) => {
-    const sql = await getSql();
     await ensureProfile(context.userId);
-    const profile = await getProfileRow(context.userId);
-    if (profile?.suspended) throw new Error("This account is suspended from campaigns");
-
-    const camp = await sql<Record<string, unknown>>`select * from campaigns where id = ${data.campaignId}`;
-    const campaign = camp[0];
-    if (!campaign) throw new Error("Campaign not found");
-    if (String(campaign.status) !== "live") throw new Error("Campaign is closed");
-
-    const dup = await sql<{ c: number }>`
-      select count(*)::int as c from submissions
-      where campaign_id = ${data.campaignId} and post_url = ${data.postUrl}
-    `;
-    if (num(dup[0]?.c) > 0) throw new Error("This link is already submitted to this campaign");
-
-    if (data.watchTimePct == null && data.retentionPct == null) {
-      throw new Error("Retention or average watch time is required. Views alone are not accepted.");
-    }
-
-    const payout = estimatePayout(String(campaign.payout_kind), num(campaign.payout_rate), data.views);
-    const rows = await sql<{ id: number }>`
-      insert into submissions (
-        campaign_id, user_id, post_url, platform, notes, analytics_urls,
-        views, watch_time_pct, retention_pct, likes, comments_count, shares,
-        estimated_payout, status
-      ) values (
-        ${data.campaignId}, ${context.userId}, ${data.postUrl}, ${data.platform},
-        ${data.notes ?? ""}, ${data.analyticsUrls ?? ""},
-        ${data.views}, ${data.watchTimePct ?? null}, ${data.retentionPct ?? null},
-        ${data.likes}, ${data.commentsCount}, ${data.shares},
-        ${payout}, 'under_review'
-      ) returning id
-    `;
-    return { id: num(rows[0]?.id) };
+    return createSubmission(await getSql(), context.userId, data);
   });
 
 export const listMySubmissions = createServerFn({ method: "GET" })
@@ -456,19 +461,10 @@ export const getMySubmission = createServerFn({ method: "GET" })
 export const submitPayoutProof = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(z.object({ id: z.number(), payoutProofUrl: z.string().url() }))
-  .handler(async ({ context, data }) => {
-    const sql = await getSql();
-    if (new Date().getDay() !== 5) throw new Error("Analytics screen recordings are submitted on Friday");
-    const rows = await sql<Record<string, unknown>>`
-      select id, status from submissions where id = ${data.id} and user_id = ${context.userId}
-    `;
-    if (!rows[0]) throw new Error("Submission not found");
-    if (String(rows[0].status) !== "approved") throw new Error("Payout proof is available after approval");
-    await sql`
-      update submissions set payout_proof_url = ${data.payoutProofUrl}, payout_proof_status = 'pending', payout_proof_reviewed_at = null, payout_proof_admin_notes = ''
-      where id = ${data.id} and user_id = ${context.userId}
-    `;
-    return { ok: true };
+  .handler(async () => {
+    throw new Error(
+      "Analytics proof is now uploaded with the original submission, not after approval.",
+    );
   });
 
 export const getSubmissionReviews = createServerFn({ method: "GET" })
@@ -492,49 +488,44 @@ export const resubmitProof = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(
     z.object({
-      id: z.number(),
-      analyticsUrls: z.string().max(1200),
-      views: z.number().int().min(0),
-      watchTimePct: z.number().min(0).max(100).optional(),
-      retentionPct: z.number().min(0).max(100).optional(),
-      likes: z.number().int().min(0),
-      commentsCount: z.number().int().min(0),
-      shares: z.number().int().min(0),
+      id: z.number().int().positive(),
+      proofUploadId: z.string().uuid(),
     }),
   )
   .handler(async ({ context, data }) => {
-    const sql = await getSql();
-    const camp = await sql<Record<string, unknown>>`
-      select c.payout_kind, c.payout_rate, s.status
-      from submissions s join campaigns c on c.id = s.campaign_id
-      where s.id = ${data.id} and s.user_id = ${context.userId}
-    `;
-    if (!camp[0]) throw new Error("Not found");
-    if (!["needs_proof", "rejected", "under_review"].includes(String(camp[0].status))) {
-      throw new Error("This submission can no longer be updated");
-    }
-    const payout = estimatePayout(String(camp[0].payout_kind), num(camp[0].payout_rate), data.views);
-    await sql`
-      update submissions set
-        analytics_urls = ${data.analyticsUrls},
-        views = ${data.views},
-        watch_time_pct = ${data.watchTimePct ?? null},
-        retention_pct = ${data.retentionPct ?? null},
-        likes = ${data.likes},
-        comments_count = ${data.commentsCount},
-        shares = ${data.shares},
-        estimated_payout = ${payout},
-        status = 'under_review'
-      where id = ${data.id} and user_id = ${context.userId}
-    `;
-    return { ok: true };
+    return retryVerification(
+      await getSql(),
+      context.userId,
+      data.id,
+      data.proofUploadId,
+    );
+  });
+
+export const retrySubmissionVerification = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    z.object({
+      id: z.number().int().positive(),
+      proofUploadId: z.string().uuid().optional(),
+    }),
+  )
+  .handler(async ({ context, data }) => {
+    return retryVerification(
+      await getSql(),
+      context.userId,
+      data.id,
+      data.proofUploadId,
+    );
   });
 
 export const getEarnings = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .handler(async ({ context }): Promise<{ payouts: Payout[]; pending: number; paid: number }> => {
-    const sql = await getSql();
-    const payouts = await sql<Record<string, unknown>>`
+  .handler(
+    async ({
+      context,
+    }): Promise<{ payouts: Payout[]; pending: number; paid: number }> => {
+      const sql = await getSql();
+      const payouts = await sql<Record<string, unknown>>`
       select p.id, p.amount, p.reference, p.paid_at, p.submission_id, c.title as campaign_title
       from payouts p
       left join submissions s on s.id = p.submission_id
@@ -542,59 +533,81 @@ export const getEarnings = createServerFn({ method: "GET" })
       where p.user_id = ${context.userId}
       order by p.paid_at desc
     `;
-    const pending = await sql<{ s: string }>`select coalesce(sum(estimated_payout),0)::text as s from submissions where user_id = ${context.userId} and status = 'approved'`;
-    const paid = await sql<{ s: string }>`select coalesce(sum(amount),0)::text as s from payouts where user_id = ${context.userId}`;
-    return {
-      pending: num(pending[0]?.s),
-      paid: num(paid[0]?.s),
-      payouts: payouts.map((r) => ({
-        id: num(r.id),
-        amount: num(r.amount),
-        reference: String(r.reference ?? ""),
-        paidAt: String(r.paid_at),
-        submissionId: r.submission_id == null ? null : num(r.submission_id),
-        campaignTitle: r.campaign_title ? String(r.campaign_title) : null,
-      })),
-    };
-  });
+      const pending = await sql<{
+        s: string;
+      }>`select coalesce(sum(estimated_payout),0)::text as s from submissions where user_id = ${context.userId} and status = 'approved'`;
+      const paid = await sql<{
+        s: string;
+      }>`select coalesce(sum(amount),0)::text as s from payouts where user_id = ${context.userId}`;
+      return {
+        pending: num(pending[0]?.s),
+        paid: num(paid[0]?.s),
+        payouts: payouts.map((r) => ({
+          id: num(r.id),
+          amount: num(r.amount),
+          reference: String(r.reference ?? ""),
+          paidAt: String(r.paid_at),
+          submissionId: r.submission_id == null ? null : num(r.submission_id),
+          campaignTitle: r.campaign_title ? String(r.campaign_title) : null,
+        })),
+      };
+    },
+  );
 
-export const listGuides = createServerFn({ method: "GET" }).handler(async () => {
-  const sql = await getSql();
-  return sql<Guide>`
+export const listGuides = createServerFn({ method: "GET" }).handler(
+  async () => {
+    const sql = await getSql();
+    return sql<Guide>`
     select slug, category, title, summary, body from guides order by sort_order
   `;
-});
+  },
+);
 
 export const getGuide = createServerFn({ method: "GET" })
   .validator(z.object({ slug: z.string() }))
   .handler(async ({ data }) => {
     const sql = await getSql();
-    const rows = await sql<Guide>`select slug, category, title, summary, body from guides where slug = ${data.slug}`;
+    const rows =
+      await sql<Guide>`select slug, category, title, summary, body from guides where slug = ${data.slug}`;
     return rows[0] ?? null;
   });
 
-export const listAssets = createServerFn({ method: "GET" }).handler(async (): Promise<AssetItem[]> => {
-  const sql = await getSql();
-  const rows = await sql<Record<string, unknown>>`select id, title, kind, description, content from assets order by id`;
-  return rows.map((r) => ({
-    id: num(r.id),
-    title: String(r.title),
-    kind: String(r.kind),
-    description: String(r.description),
-    content: String(r.content),
-  }));
-});
+export const listAssets = createServerFn({ method: "GET" }).handler(
+  async (): Promise<AssetItem[]> => {
+    const sql = await getSql();
+    const rows = await sql<
+      Record<string, unknown>
+    >`select id, title, kind, description, content from assets order by id`;
+    return rows.map((r) => ({
+      id: num(r.id),
+      title: String(r.title),
+      kind: String(r.kind),
+      description: String(r.description),
+      content: String(r.content),
+    }));
+  },
+);
 
 export const getAdminOverview = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }): Promise<AdminOverview> => {
     await requireAdmin(context.userId);
     const sql = await getSql();
-    const pending = await sql<{ c: number }>`select count(*)::int as c from submissions where status in ('under_review', 'needs_proof')`;
-    const live = await sql<{ c: number }>`select count(*)::int as c from campaigns where status = 'live'`;
-    const paid = await sql<{ s: string }>`select coalesce(sum(amount),0)::text as s from payouts where paid_at >= date_trunc('month', now())`;
-    const flagged = await sql<{ c: number }>`select count(*)::int as c from submissions where flagged = true`;
-    const creators = await sql<{ c: number }>`select count(*)::int as c from profiles`;
+    const pending = await sql<{
+      c: number;
+    }>`select count(*)::int as c from submissions where status in ('under_review', 'needs_proof') and verification_status = 'verified'`;
+    const live = await sql<{
+      c: number;
+    }>`select count(*)::int as c from campaigns where status = 'live'`;
+    const paid = await sql<{
+      s: string;
+    }>`select coalesce(sum(amount),0)::text as s from payouts where paid_at >= date_trunc('month', now())`;
+    const flagged = await sql<{
+      c: number;
+    }>`select count(*)::int as c from submissions where flagged = true`;
+    const creators = await sql<{
+      c: number;
+    }>`select count(*)::int as c from profiles`;
     return {
       pendingReview: num(pending[0]?.c),
       liveCampaigns: num(live[0]?.c),
@@ -716,47 +729,59 @@ export const adminReviewSubmission = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     await requireAdmin(context.userId);
     const sql = await getSql();
-    await sql`
-      insert into submission_reviews (submission_id, reviewer_id, action, reason, notes)
-      values (${data.id}, ${context.userId}, ${data.action}, ${data.reason ?? ""}, ${data.notes ?? ""})
-    `;
-    if (data.action === "flag") {
-      await sql`update submissions set flagged = true, admin_notes = ${data.notes ?? ""} where id = ${data.id}`;
-      return { ok: true };
-    }
-    const status =
-      data.action === "approve" ? "approved" : data.action === "reject" ? "rejected" : "needs_proof";
-    await sql`
-      update submissions set
-        status = ${status},
-        admin_notes = ${data.notes ?? ""},
-        reviewed_at = now(),
-        flagged = ${data.action === "reject"}
-      where id = ${data.id}
-    `;
-    return { ok: true };
+    return reviewSubmission(sql, context.userId, data);
+  });
+
+export const adminGetPayoutReadiness = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    await requireAdmin(context.userId);
+    return getPayoutReadiness();
+  });
+
+export const adminPaySubmission = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ submissionId: z.number().int().positive() }))
+  .handler(async ({ context, data }) => {
+    await requireAdmin(context.userId);
+    return paySubmission(await getSql(), data.submissionId, context.userId);
+  });
+
+/** Poll only existing payment requests; this endpoint can never create one. */
+export const adminReconcilePayment = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ submissionId: z.number().int().positive() }))
+  .handler(async ({ context, data }) => {
+    await requireAdmin(context.userId);
+    const sql = await getSql();
+    const existing =
+      await sql`select id from direct_payout_requests where submission_id = ${data.submissionId}`;
+    if (!existing[0])
+      throw new Error("No existing payment request to reconcile");
+    return paySubmission(sql, data.submissionId, context.userId);
   });
 
 export const adminReviewPayoutProof = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator(z.object({ submissionId: z.number(), action: z.enum(["accept", "reject"]), notes: z.string().max(600).optional() }))
-  .handler(async ({ context, data }) => {
+  .validator(
+    z.object({
+      submissionId: z.number(),
+      action: z.enum(["accept", "reject"]),
+      notes: z.string().max(600).optional(),
+    }),
+  )
+  .handler(async ({ context }) => {
     await requireAdmin(context.userId);
-    const sql = await getSql();
-    const status = data.action === "accept" ? "accepted" : "rejected";
-    const rows = await sql<{ id: number }>`
-      update submissions
-      set payout_proof_status = ${status}, payout_proof_reviewed_at = now(), payout_proof_admin_notes = ${data.notes ?? ""}
-      where id = ${data.submissionId} and status = 'approved' and payout_proof_url <> ''
-      returning id
-    `;
-    if (!rows[0]) throw new Error("Payout proof not found or video is not approved");
-    return { ok: true };
+    throw new Error(
+      "Proof is reviewed together with the submission. The separate payout-proof review is retired.",
+    );
   });
 
 export const adminReviewPayoutWallet = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator(z.object({ userId: z.string(), action: z.enum(["verify", "reject"]) }))
+  .validator(
+    z.object({ userId: z.string(), action: z.enum(["verify", "reject"]) }),
+  )
   .handler(async ({ context, data }) => {
     await requireAdmin(context.userId);
     const sql = await getSql();
@@ -768,90 +793,36 @@ export const adminReviewPayoutWallet = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+/** Legacy write paths are deliberately closed; historical tables stay readable. */
 export const adminPrepareUsd1Batch = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }): Promise<PayoutBatch> => {
     await requireAdmin(context.userId);
-    if (new Date().getDay() !== 5) throw new Error("USD1 payout batches are prepared every Friday");
-    const sql = await getSql();
-    const batchDate = new Date().toISOString().slice(0, 10);
-    const existing = await sql<Record<string, unknown>>`
-      select * from payout_batches where batch_date = ${batchDate}
-    `;
-    if (existing[0]) return mapPayoutBatch(existing[0]);
-    const eligible = await sql<Record<string, unknown>>`
-      select s.id, s.user_id, s.estimated_payout, p.payout_wallet_address
-      from submissions s
-      join profiles p on p.user_id = s.user_id
-      where s.status = 'approved'
-        and s.payout_proof_status = 'accepted'
-        and p.payout_wallet_status = 'verified'
-        and p.payout_wallet_address is not null
-        and not exists (select 1 from payouts x where x.submission_id = s.id)
-        and not exists (select 1 from payout_items i where i.submission_id = s.id)
-      order by s.id
-    `;
-    const totalUnits = eligible.reduce((sum, row) => sum + Math.round(num(row.estimated_payout) * 10 ** USD1_DECIMALS), 0);
-    const batchRows = await sql<Record<string, unknown>>`
-      insert into payout_batches (batch_date, asset, network, token_mint, token_decimals, status, total_units, item_count, created_by)
-      values (${batchDate}, 'USD1', ${USD1_NETWORK}, ${USD1_SOLANA_MINT}, ${USD1_DECIMALS}, 'draft', ${totalUnits}, ${eligible.length}, ${context.userId})
-      returning *
-    `;
-    const batchId = num(batchRows[0].id);
-    for (const row of eligible) {
-      const amountUnits = Math.round(num(row.estimated_payout) * 10 ** USD1_DECIMALS);
-      await sql`
-        insert into payout_items (batch_id, submission_id, user_id, wallet_address, amount_units, token_mint, idempotency_key)
-        values (${batchId}, ${num(row.id)}, ${String(row.user_id)}, ${String(row.payout_wallet_address)}, ${amountUnits}, ${USD1_SOLANA_MINT}, ${`vuze:usd1:payout:${num(row.id)}`})
-      `;
-    }
-    return mapPayoutBatch(batchRows[0]);
+    throw new Error(
+      "Friday batches have been replaced by per-entry USD1 payouts.",
+    );
   });
 
 export const adminApproveUsd1Batch = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(z.object({ batchId: z.number() }))
-  .handler(async ({ context, data }): Promise<PayoutBatch> => {
+  .handler(async ({ context }): Promise<PayoutBatch> => {
     await requireAdmin(context.userId);
-    const sql = await getSql();
-    const rows = await sql<Record<string, unknown>>`
-      update payout_batches
-      set status = 'approved', approved_by = ${context.userId}, approved_at = now()
-      where id = ${data.batchId} and status = 'draft'
-      returning *
-    `;
-    if (!rows[0]) throw new Error("Batch is missing or already approved");
-    return mapPayoutBatch(rows[0]);
+    throw new Error(
+      "Legacy batches are audit-only. Reconcile reservations before direct payout.",
+    );
   });
 
 export const adminMarkPaid = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(
-    z.object({
-      submissionId: z.number(),
-      reference: z.string().max(120),
-    }),
+    z.object({ submissionId: z.number(), reference: z.string().max(120) }),
   )
-  .handler(async ({ context, data }) => {
+  .handler(async ({ context }) => {
     await requireAdmin(context.userId);
-    if (new Date().getDay() !== 5) throw new Error("Payouts are processed every Friday");
-    const sql = await getSql();
-    const rows = await sql<Record<string, unknown>>`
-      select id, user_id, estimated_payout, status, payout_proof_url, payout_proof_status from submissions where id = ${data.submissionId}
-    `;
-    const s = rows[0];
-    if (!s) throw new Error("Not found");
-    if (String(s.status) !== "approved") throw new Error("Only approved submissions can be paid");
-    if (!String(s.payout_proof_url ?? "")) throw new Error("Creator must submit an analytics screen recording before payout");
-    if (String(s.payout_proof_status) !== "accepted") throw new Error("Admin must authenticate the analytics recording before payout");
-    const alreadyPaid = await sql<{ c: number }>`select count(*)::int as c from payouts where submission_id = ${data.submissionId}`;
-    if (num(alreadyPaid[0]?.c) > 0) throw new Error("This video has already been paid");
-    await sql`
-      insert into payouts (user_id, submission_id, amount, reference)
-      values (${String(s.user_id)}, ${data.submissionId}, ${num(s.estimated_payout)}, ${data.reference})
-    `;
-    await sql`update submissions set status = 'paid', paid_at = now() where id = ${data.submissionId}`;
-    return { ok: true };
+    throw new Error(
+      "Manual mark-paid is disabled. Only a finalized, verified USD1 transfer closes an entry.",
+    );
   });
 
 export const adminListPayouts = createServerFn({ method: "GET" })
@@ -873,7 +844,7 @@ export const adminListPayouts = createServerFn({ method: "GET" })
        from submissions s
        join campaigns c on c.id = s.campaign_id
        join profiles p on p.user_id = s.user_id
-       where s.status = 'approved' and s.payout_proof_url <> '' and s.status <> 'paid'
+       where s.status in ('approved', 'payment_processing')
        order by s.reviewed_at desc`,
     );
     return {
@@ -913,7 +884,9 @@ export const adminListCreators = createServerFn({ method: "GET" })
       suspended: Boolean(r.suspended),
       submissions: num(r.submissions),
       earned: num(r.earned),
-      payoutWalletAddress: r.payout_wallet_address ? String(r.payout_wallet_address) : null,
+      payoutWalletAddress: r.payout_wallet_address
+        ? String(r.payout_wallet_address)
+        : null,
       payoutWalletStatus: String(r.payout_wallet_status ?? "not_set"),
     }));
   });
