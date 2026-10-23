@@ -34,13 +34,18 @@ function AdminCreators() {
     }
   }
 
-  async function reviewWallet(userId: string, action: "verify" | "reject") {
+  async function reviewWallet(
+    userId: string,
+    walletAddress: string,
+    action: "verify" | "reject",
+  ) {
     try {
-      await adminReviewPayoutWallet({ data: { userId, action } });
+      await adminReviewPayoutWallet({ data: { userId, walletAddress, action } });
       toast.success(action === "verify" ? "Payout wallet verified" : "Payout wallet rejected");
       await q.refetch();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not review wallet");
+      await q.refetch();
     }
   }
 
@@ -67,8 +72,8 @@ function AdminCreators() {
                 {c.payoutWalletAddress ? <span className="max-w-56 truncate self-center text-xs text-muted-foreground" title={c.payoutWalletAddress}>{c.payoutWalletAddress}</span> : null}
                 {c.payoutWalletStatus === "pending" ? (
                   <>
-                    <Button size="sm" variant="outline" onClick={() => void reviewWallet(c.userId, "reject")}>Reject wallet</Button>
-                    <Button size="sm" onClick={() => void reviewWallet(c.userId, "verify")}>Verify wallet</Button>
+                    <Button size="sm" variant="outline" disabled={!c.payoutWalletAddress} onClick={() => c.payoutWalletAddress && void reviewWallet(c.userId, c.payoutWalletAddress, "reject")}>Reject wallet</Button>
+                    <Button size="sm" disabled={!c.payoutWalletAddress} onClick={() => c.payoutWalletAddress && void reviewWallet(c.userId, c.payoutWalletAddress, "verify")}>Verify wallet</Button>
                   </>
                 ) : null}
                 <Button size="sm" variant="outline" onClick={() => void patch(c.userId, { organicVerified: !c.organicVerified })}>

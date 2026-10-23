@@ -9,6 +9,7 @@ import {
   reviewSubmission,
 } from "./submission-service.server";
 import { getPayoutReadiness, paySubmission } from "./payout-service.server";
+import { reviewPayoutWallet } from "./payout-wallet-review.server";
 import type {
   AdminOverview,
   AssetItem,
@@ -780,17 +781,24 @@ export const adminReviewPayoutProof = createServerFn({ method: "POST" })
 export const adminReviewPayoutWallet = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(
-    z.object({ userId: z.string(), action: z.enum(["verify", "reject"]) }),
+    z.object({
+      userId: z.string().min(1),
+      walletAddress: z
+        .string()
+        .regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "Enter a valid Solana wallet address"),
+      action: z.enum(["verify", "reject"]),
+    }),
   )
   .handler(async ({ context, data }) => {
     await requireAdmin(context.userId);
     const sql = await getSql();
-    const status = data.action === "verify" ? "verified" : "rejected";
-    await sql`
-      update profiles set payout_wallet_status = ${status}, payout_wallet_verified_at = ${data.action === "verify" ? new Date().toISOString() : null}
-      where user_id = ${data.userId} and payout_wallet_address is not null
-    `;
-    return { ok: true };
+    return reviewPayoutWallet(
+      sql,
+      context.userId,
+      data.userId,
+      data.walletAddress,
+      data.action,
+    );
   });
 
 /** Legacy write paths are deliberately closed; historical tables stay readable. */

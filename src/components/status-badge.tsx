@@ -28,6 +28,7 @@ export function SubmissionStatusBadge({ status }: { status: string }) {
     verification_failed: { tone: "bad", label: "Verification failed" },
     under_review: { tone: "warn", label: "Under review" },
     needs_proof: { tone: "warn", label: "Needs proof" },
+    below_threshold: { tone: "warn", label: "Waiting for views" },
     approved: { tone: "good", label: "Approved" },
     rejected: { tone: "bad", label: "Rejected" },
     paid: { tone: "accent", label: "Paid" },
