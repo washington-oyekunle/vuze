@@ -65,11 +65,17 @@ function SubmissionDetail() {
     if (!s || busy) return;
     setBusy(true);
     try {
-      await retrySubmissionVerification({
+      const result = await retrySubmissionVerification({
         data: { id: s.id, proofUploadId: replacement?.id },
       });
       setReplacement(null);
-      toast.success("Verification updated");
+      if (result.verificationStatus === "unavailable")
+        toast.error(result.verificationReason || "View verification is unavailable. Try again later.");
+      else if (result.status === "rejected")
+        toast.error(result.verificationReason || "Minimum threshold not reached yet.");
+      else if (result.status === "under_review")
+        toast.success("Minimum reached. Your entry is in the admin review queue.");
+      else toast("Verification is still processing.");
       await q.refetch();
       await reviews.refetch();
     } catch (error) {
@@ -81,9 +87,13 @@ function SubmissionDetail() {
     }
   }
 
-  const canRetry = ["verification_failed", "needs_proof", "verifying"].includes(
-    s.status,
-  );
+  const belowThreshold =
+    s.status === "rejected" &&
+    s.verificationStatus === "verified" &&
+    s.views < s.minViews;
+  const canRetry =
+    belowThreshold ||
+    ["verification_failed", "needs_proof", "verifying"].includes(s.status);
   const needsReplacement = s.status === "needs_proof" || !s.analyticsProofUrl;
   return (
     <AppShell>
@@ -92,7 +102,9 @@ function SubmissionDetail() {
         <Card className="md:col-span-2">
           <CardContent className="space-y-4 text-sm">
             <div className="flex items-center justify-between">
-              <SubmissionStatusBadge status={s.status} />
+              <SubmissionStatusBadge
+                status={belowThreshold ? "below_threshold" : s.status}
+              />
               <a
                 href={s.postUrl}
                 className="underline"
@@ -149,8 +161,15 @@ function SubmissionDetail() {
                 <h2 className="font-medium">
                   {needsReplacement
                     ? "Upload analytics proof"
+                    : belowThreshold
+                      ? "Check again after views grow"
                     : "Verification recovery"}
                 </h2>
+                {belowThreshold ? (
+                  <p className="text-muted-foreground">
+                    Minimum threshold not reached yet. You can recheck this same post after it reaches {compactNumber(s.minViews)} views; there is no need to submit it again.
+                  </p>
+                ) : null}
                 {s.status === "verifying" ? (
                   <p className="text-muted-foreground">
                     If the check was interrupted, wait one minute and retry.

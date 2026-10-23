@@ -27,6 +27,13 @@ type Entry = {
   views: number;
   flagged: boolean;
 };
+type VerificationSnapshot = {
+  status: string;
+  verificationStatus: string;
+  verificationReason: string;
+  views: number;
+  minViews: number;
+};
 
 async function attachProof(sql: Sql, id: string, userId: string) {
   const uploads = await sql<{ id: string; content_type: string }>`
@@ -42,6 +49,28 @@ async function attachProof(sql: Sql, id: string, userId: string) {
   return {
     url: `/api/analytics-proof?id=${encodeURIComponent(id)}`,
     contentType: uploads[0].content_type,
+  };
+}
+
+async function getVerificationSnapshot(
+  sql: Sql,
+  id: number,
+): Promise<VerificationSnapshot> {
+  const rows = await sql<{
+    status: string;
+    verification_status: string;
+    verification_reason: string;
+    views: number;
+    min_views: number;
+  }>`select status, verification_status, verification_reason, views, min_views from submissions where id = ${id}`;
+  const row = rows[0];
+  if (!row) throw new Error("Submission not found after verification");
+  return {
+    status: row.status,
+    verificationStatus: row.verification_status,
+    verificationReason: row.verification_reason,
+    views: Number(row.views),
+    minViews: Number(row.min_views),
   };
 }
 
@@ -79,13 +108,15 @@ export async function createSubmission(
       id: number;
       user_id: string;
       proof_upload_id: string;
+      campaign_id: number;
     }>`
-      select id, user_id, proof_upload_id from submissions where platform = ${identity.platform} and video_id = ${identity.videoId}
+      select id, user_id, proof_upload_id, campaign_id from submissions where platform = ${identity.platform} and video_id = ${identity.videoId}
     `;
     if (existing[0]) {
       if (
         existing[0].user_id === userId &&
-        existing[0].proof_upload_id === data.proofUploadId
+        existing[0].proof_upload_id === data.proofUploadId &&
+        Number(existing[0].campaign_id) === data.campaignId
       )
         return { id: Number(existing[0].id), created: false };
       throw new Error("This video has already been submitted");
@@ -116,10 +147,7 @@ export async function createSubmission(
   // The durable entry already exists if the API times out or this process is interrupted.
   if (created)
     await completeVerification(sql, id, attemptId, await verifyVideo(identity));
-  const result = await sql<{
-    status: string;
-  }>`select status from submissions where id = ${id}`;
-  return { id, status: result[0].status };
+  return { id, ...(await getVerificationSnapshot(sql, id)) };
 }
 
 export async function completeVerification(
@@ -132,20 +160,21 @@ export async function completeVerification(
     await sql`update submissions set status = 'verification_failed', verification_status = 'unavailable',
       verification_reason = ${result.reason}, verified_at = null, verification_source = '', estimated_payout = 0
       where id = ${id} and status = 'verifying' and verification_attempt_id = ${attemptId}`;
-    return;
+  } else {
+    const metrics = result.metrics;
+    // SQL numeric arithmetic preserves the campaign rate; no creator-supplied views participate.
+    await sql`update submissions s set views = ${metrics.views}, verification_status = 'verified',
+      verification_source = ${metrics.source}, verified_at = ${metrics.observedAt},
+      status = case when ${metrics.views} >= s.min_views then 'under_review' else 'rejected' end,
+      verification_reason = case when ${metrics.views} >= s.min_views then 'Minimum verified views reached; awaiting visual proof review.'
+        else 'Minimum threshold not reached yet. Retry after the post reaches the minimum.' end,
+      estimated_payout = case when ${metrics.views} < s.min_views then 0
+        when c.payout_kind = 'flat' then c.payout_rate
+        when c.payout_kind = 'per_1k' then round(c.payout_rate * ${metrics.views}::numeric / 1000, 6) else 0 end
+      from campaigns c where s.campaign_id = c.id and s.id = ${id}
+        and s.status = 'verifying' and s.verification_attempt_id = ${attemptId}`;
   }
-  const metrics = result.metrics;
-  // SQL numeric arithmetic preserves the campaign rate; no creator-supplied views participate.
-  await sql`update submissions s set views = ${metrics.views}, verification_status = 'verified',
-    verification_source = ${metrics.source}, verified_at = ${metrics.observedAt},
-    status = case when ${metrics.views} >= s.min_views then 'under_review' else 'rejected' end,
-    verification_reason = case when ${metrics.views} >= s.min_views then 'Minimum verified views reached; awaiting visual proof review.'
-      else 'Automatically rejected: API-verified views are below the minimum.' end,
-    estimated_payout = case when ${metrics.views} < s.min_views then 0
-      when c.payout_kind = 'flat' then c.payout_rate
-      when c.payout_kind = 'per_1k' then round(c.payout_rate * ${metrics.views}::numeric / 1000, 6) else 0 end
-    from campaigns c where s.campaign_id = c.id and s.id = ${id}
-      and s.status = 'verifying' and s.verification_attempt_id = ${attemptId}`;
+  return getVerificationSnapshot(sql, id);
 }
 
 export async function retryVerification(
@@ -169,10 +198,15 @@ export async function retryVerification(
       entry.status === "verifying" &&
       (!entry.verification_started_at ||
         new Date(entry.verification_started_at).getTime() < Date.now() - 60000);
+    const belowThreshold =
+      entry.status === "rejected" &&
+      entry.verification_status === "verified" &&
+      Number(entry.views) < Number(entry.min_views);
     if (!(
       entry.status === "verification_failed" ||
       entry.status === "needs_proof" ||
-      stale
+      stale ||
+      belowThreshold
     ))
       throw new Error("This submission cannot be reverified right now");
     if (entry.status === "needs_proof" && !proofUploadId)
@@ -200,8 +234,13 @@ export async function retryVerification(
       where id = ${id}`;
     return identity;
   });
-  await completeVerification(sql, id, attemptId, await verifyVideo(identity));
-  return { ok: true };
+  const verification = await completeVerification(
+    sql,
+    id,
+    attemptId,
+    await verifyVideo(identity),
+  );
+  return verification;
 }
 
 export async function reviewSubmission(

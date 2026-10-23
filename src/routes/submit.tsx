@@ -64,7 +64,21 @@ function SubmitPage() {
           proofUploadId: proof.id,
         },
       });
-      toast.success("Submitted for automated verification");
+      if (res.verificationStatus === "unavailable")
+        toast.error("View verification is unavailable. Your entry is saved; retry from its detail page.");
+      else if (
+        res.status === "rejected" &&
+        res.verificationStatus === "verified" &&
+        res.views < res.minViews
+      )
+        toast.error(res.verificationReason || "Minimum threshold not reached yet.");
+      else if (res.status === "under_review")
+        toast.success("Views verified. Your entry is in the admin review queue.");
+      else if (["approved", "payment_processing", "paid"].includes(res.status))
+        toast("This video is already submitted. Opening its existing record.");
+      else if (res.status === "rejected")
+        toast.error("This video has already been reviewed and rejected.");
+      else toast("Submission saved. Check the entry details for its current status.");
       void nav({ to: "/submissions/$id", params: { id: String(res.id) } });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not submit");
