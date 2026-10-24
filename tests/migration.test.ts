@@ -47,6 +47,23 @@ test("upgrade holds self-reported unpaid work without deleting history or reserv
       (await pg.query<any>("select reference from payouts")).rows[0].reference,
       "historic-reference",
     );
+    const legacyPayout = (
+      await pg.query<any>(
+        "select token_symbol,token_mint,token_decimals,network from payouts",
+      )
+    ).rows[0];
+    assert.equal(legacyPayout.token_symbol, "UNKNOWN");
+    assert.equal(legacyPayout.token_mint, null);
+    assert.equal(legacyPayout.token_decimals, null);
+    assert.equal(legacyPayout.network, null);
+    const legacyCampaign = (
+      await pg.query<any>(
+        "select payout_token_symbol,payout_token_decimals,payout_network from campaigns where id=1",
+      )
+    ).rows[0];
+    assert.equal(legacyCampaign.payout_token_symbol, "USD1");
+    assert.equal(legacyCampaign.payout_token_decimals, 6);
+    assert.equal(legacyCampaign.payout_network, "solana-mainnet");
     assert.equal(
       (await pg.query<any>("select reason from submission_reviews")).rows[0]
         .reason,

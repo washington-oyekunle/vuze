@@ -7,7 +7,7 @@ A creator desk for organic UGC and clipping campaigns, built with TanStack Start
 1. **Creator:** submit a public video URL and an analytics screenshot or recording together. PNG, JPEG, WebP, MP4, and WebM are supported, up to 25 MiB. Files upload directly into private Storage; the web server never receives a large multipart body.
 2. **Automatic verification:** the server retrieves the view count. At or above the campaign minimum (default 1,000), the entry enters review; below the minimum, it shows “Minimum threshold not reached yet,” stays out of review, and can be rechecked on the same entry after views grow. Missing permission, unavailable metrics, timeouts, and exhausted API quotas produce a recoverable verification hold, **not a zero-view rejection**.
 3. **Admin console:** the queue refreshes every five seconds. Admins visually review the uploaded proof and approve or decline with an audited reason. This is polling, not a WebSocket/Realtime subscription. View counts do not establish ownership, audience quality, or organic traffic; proof review still matters.
-4. **Pay:** an admin requests one USD1 payment through a separately operated secure signer. A durable request snapshots the recipient and amount. Repeated clicks reconcile that request; ambiguous requests never create a new transfer. The entry closes only after the server verifies a finalized Solana mainnet transaction against the snapshot.
+4. **Pay:** an admin requests one payment in the Solana token selected for that campaign through a separately operated secure signer. A durable request snapshots the recipient, amount, token mint, decimals, network, and treasury. Repeated clicks reconcile that request; ambiguous requests never create a new transfer. The entry closes only after the server verifies a finalized Solana mainnet transaction against the snapshot.
 
 The Friday-only second proof upload, new Friday batches, and manual “mark paid” write paths are retired. Existing batch tables and history remain for audit.
 
@@ -58,22 +58,41 @@ The adapter must return an independently fetched count bound to that exact ident
 
 Evidence older than five minutes, missing counts, mismatched IDs, malformed counts, and provider failures are held for retry. Never implement this adapter by echoing creator-entered metrics. Provider quota and permissions must be monitored in the service that owns the adapter.
 
-## Connect USD1 safely
+## Configure Solana-token payouts safely
 
-The configured asset is USD1 on Solana mainnet, mint `USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB`, with six decimals. Verify your treasury's asset and permissions before enabling payments. No treasury private key belongs in this app or in browser code.
+Campaigns select from an explicit server-side allowlist of Solana SPL or Token-2022 mints. Each campaign's rate is denominated in that token; the app does not convert different tokens to USD. Existing campaigns keep their USD1 mint and six-decimal denomination for continuity. Verify every mint, decimal count, and treasury before enabling payments. No treasury private key belongs in this app or in browser code.
 
 Payments stay disabled until all of these are configured:
 
-- `USD1_PAYOUTS_ENABLED=true`
+- `SOLANA_PAYOUTS_ENABLED=true`
 - A durable `DATABASE_URL`
-- `USD1_SIGNER_URL` (HTTPS), `USD1_SIGNER_TOKEN`, and `USD1_PAYOUT_NAMESPACE` (a stable, unique deployment name so staging and production cannot reuse payout keys)
+- `SOLANA_SIGNER_URL` (HTTPS), `SOLANA_SIGNER_TOKEN`, and `SOLANA_PAYOUT_NAMESPACE` (a stable, unique deployment name so staging and production cannot reuse payout keys)
 - `SOLANA_RPC_URL` (HTTPS, mainnet)
-- `USD1_TREASURY_WALLET` (treasury public key)
+- `SOLANA_PAYOUT_ASSETS`, a JSON array of allowlisted assets. Each object must contain `symbol`, `mint`, `decimals`, and `treasuryWallet` (a public key), for example:
+
+```json
+[
+  {
+    "symbol": "USD1",
+    "mint": "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB",
+    "decimals": 6,
+    "treasuryWallet": "<USD1 treasury public key>"
+  },
+  {
+    "symbol": "TOKEN",
+    "mint": "<verified Solana token mint>",
+    "decimals": 9,
+    "treasuryWallet": "<token treasury public key>"
+  }
+]
+```
+
+The allowlist is capped at 50 unique mints. The server verifies mint ownership and decimals against mainnet before creating a request; only legacy SPL Token and Token-2022 mints are supported (not native SOL). A campaign's token cannot be changed after submissions exist. Keep symbols descriptive, since they are display labels and do not identify the on-chain asset.
 
 The separately operated signer must expose:
 
-- `POST {USD1_SIGNER_URL}/payouts/{idempotencyKey}` with `{idempotencyKey,destination,mint,amountUnits,network}`. Persist the key and immutable payload **before** broadcasting. A key can never authorize a second transfer or a changed payload.
-- `GET {USD1_SIGNER_URL}/payouts/{idempotencyKey}` to reconcile that same request.
+- `POST {SOLANA_SIGNER_URL}/payouts/{idempotencyKey}` with `{idempotencyKey,destination,treasuryWallet,mint,amountUnits,network}`. `treasuryWallet` is the asset-specific public key from the immutable request snapshot. Persist the key and immutable payload **before** broadcasting. A key can never authorize a second transfer or a changed payload.
+- `GET {SOLANA_SIGNER_URL}/payouts/{idempotencyKey}` to reconcile that same request.
 - Return `{ "signature": "<Solana transaction signature>" }` once the transaction exists. Pending/not-found responses must not cause another broadcast. Bearer authentication is required.
 
 The application verifies finalized mainnet transaction success, treasury signature and source, recipient ownership, mint, and exact token-unit deltas before recording payment. Creator wallets must be admin-verified, the account must not be suspended, and submissions must be API-verified, unflagged, and approved. Payment history records the chain signature.

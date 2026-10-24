@@ -5,7 +5,7 @@ import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { useQuery } from "@tanstack/react-query";
 import { getEarnings } from "@/lib/vuze/server";
 import { Card, CardContent } from "@/components/ui/card";
-import { money } from "@/lib/utils";
+import { tokenAmount, tokenTotalsLabel } from "@/lib/utils";
 import { format } from "date-fns";
 
 export const Route = createFileRoute("/earnings")({ component: EarningsPage });
@@ -23,13 +23,13 @@ function EarningsPage() {
         <Card>
           <CardContent>
             <p className="text-xs text-muted-foreground">Pending payout</p>
-            <p className="mt-2 font-display text-2xl tabular-nums">{money(q.data?.pending ?? 0)}</p>
+            <p className="mt-2 font-display text-2xl tabular-nums">{tokenTotalsLabel(q.data?.pendingByAsset ?? [])}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent>
             <p className="text-xs text-muted-foreground">Paid</p>
-            <p className="mt-2 font-display text-2xl tabular-nums">{money(q.data?.paid ?? 0)}</p>
+            <p className="mt-2 font-display text-2xl tabular-nums">{tokenTotalsLabel(q.data?.paidByAsset ?? [])}</p>
           </CardContent>
         </Card>
       </div>
@@ -46,7 +46,7 @@ function EarningsPage() {
                     {format(new Date(p.paidAt), "MMM d, yyyy")} {p.reference ? `· ${p.reference}` : ""}
                   </p>
                 </div>
-                <span className="tabular-nums">{money(p.amount)}</span>
+                <span className="tabular-nums">{tokenAmount(p.amount, p.tokenSymbol, p.tokenDecimals ?? 9, p.tokenMint)}</span>
               </li>
             ))}
           </ul>

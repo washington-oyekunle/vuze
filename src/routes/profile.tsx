@@ -146,10 +146,10 @@ function ProfilePage() {
         <CardContent>
           <form className="grid gap-3" onSubmit={onSaveWallet}>
             <div>
-              <h2 className="text-sm font-medium">USD1 payout wallet</h2>
+              <h2 className="text-sm font-medium">Solana payout wallet</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Use a Solana mainnet wallet that can receive USD1. Wallet
-                changes require admin verification before payment.
+                Use a Solana mainnet wallet that can receive campaign payout
+                tokens. Wallet changes require admin verification before payment.
               </p>
             </div>
             <Label htmlFor="wallet">Solana wallet address</Label>

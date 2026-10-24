@@ -17,7 +17,7 @@ import {
 import { SubmissionStatusBadge } from "@/components/status-badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { compactNumber, money } from "@/lib/utils";
+import { compactNumber, tokenAmount } from "@/lib/utils";
 
 export const Route = createFileRoute("/submissions/$id")({
   component: SubmissionDetail,
@@ -197,8 +197,8 @@ function SubmissionDetail() {
             ) : null}
             {s.status === "payment_processing" ? (
               <p className="text-muted-foreground">
-                Your USD1 transfer is pending confirmation. The entry closes
-                only after the finalized Solana transaction is verified.
+                Your {s.payoutTokenSymbol} transfer is pending confirmation. The
+                entry closes only after the finalized Solana transaction is verified.
               </p>
             ) : null}
           </CardContent>
@@ -209,7 +209,7 @@ function SubmissionDetail() {
               {s.status === "paid" ? "Paid" : "Estimated payout"}
             </p>
             <p className="mt-1 font-display text-2xl tabular-nums">
-              {money(s.estimatedPayout)} USD1
+              {tokenAmount(s.estimatedPayout, s.payoutTokenSymbol, s.payoutTokenDecimals, s.payoutTokenMint)}
             </p>
           </CardContent>
         </Card>

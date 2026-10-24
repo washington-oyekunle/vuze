@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { adminListCreators, adminReviewPayoutWallet, adminUpdateCreator, getMyProfile } from "@/lib/vuze/server";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { money } from "@/lib/utils";
+import { tokenTotalsLabel } from "@/lib/utils";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/admin/creators")({ component: AdminCreators });
@@ -59,13 +59,13 @@ function AdminCreators() {
               <div>
                 <p className="text-sm font-medium">{c.displayName}</p>
                 <p className="text-xs text-muted-foreground tabular-nums">
-                  {c.submissions} posts · {money(c.earned)}
+                  {c.submissions} posts · {tokenTotalsLabel(c.earnedByAsset)}
                 </p>
                 <div className="mt-2 flex gap-2">
                   {c.role === "admin" ? <Badge>Admin</Badge> : null}
                   {c.organicVerified ? <Badge tone="good">Organic</Badge> : null}
                   {c.suspended ? <Badge tone="bad">Suspended</Badge> : null}
-                  {c.payoutWalletStatus === "verified" ? <Badge tone="good">USD1 wallet verified</Badge> : c.payoutWalletStatus !== "not_set" ? <Badge>{`Wallet ${c.payoutWalletStatus}`}</Badge> : null}
+                  {c.payoutWalletStatus === "verified" ? <Badge tone="good">Solana wallet verified</Badge> : c.payoutWalletStatus !== "not_set" ? <Badge>{`Wallet ${c.payoutWalletStatus}`}</Badge> : null}
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">

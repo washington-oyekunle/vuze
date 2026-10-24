@@ -30,7 +30,7 @@ function CampaignsPage() {
       .filter((campaign) => status === "all" || campaign.status === status)
       .filter((campaign) => {
         if (!needle) return true;
-        return [campaign.title, campaign.brand, campaign.summary, campaign.payoutLabel]
+        return [campaign.title, campaign.brand, campaign.summary, campaign.payoutLabel, campaign.payoutTokenSymbol]
           .join(" ")
           .toLowerCase()
           .includes(needle);
@@ -154,7 +154,7 @@ function CampaignsPage() {
                   </div>
                   <p className="text-sm text-muted-foreground">{campaign.summary}</p>
                   <div className="mt-auto flex items-center justify-between gap-3 text-sm">
-                    <span>{campaign.payoutLabel}</span>
+                    <span>{campaign.payoutLabel} · {campaign.payoutTokenSymbol}</span>
                     {campaign.organicOnly ? <Badge>Organic only</Badge> : null}
                   </div>
                 </CardContent>

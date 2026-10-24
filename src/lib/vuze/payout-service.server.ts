@@ -1,27 +1,33 @@
 import type { Sql } from "../db";
 
-export const USD1_MINT = "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB";
-export const USD1_DECIMALS = 6;
-export const USD1_NETWORK = "solana-mainnet";
+export const SOLANA_MAINNET = "solana-mainnet" as const;
 const MAINNET_GENESIS = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const TIMEOUT_MS = 15_000;
-
 type PayoutResult = { status: "processing" | "paid"; message?: string };
+export type SolanaPayoutAsset = {
+  symbol: string;
+  mint: string;
+  decimals: number;
+  network: typeof SOLANA_MAINNET;
+  treasuryWallet: string;
+};
+export type SolanaPayoutAssetOption = Omit<SolanaPayoutAsset, "treasuryWallet">;
 type RequestRow = {
   id: number | string;
   submission_id: number | string;
   idempotency_key: string;
   creator_wallet: string;
   amount_units: string;
+  token_symbol: string;
   token_mint: string;
+  token_decimals: number | string;
   network: string;
   treasury_wallet: string;
   transaction_signature: string | null;
   status: string;
 };
-
 function env(name: string): string | undefined {
   const value = typeof process !== "undefined" ? process.env[name] : undefined;
   return value?.trim() || undefined;
@@ -38,7 +44,7 @@ function isHttps(url: string | undefined): boolean {
 function base58Bytes(value: string): Uint8Array | null {
   const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
   if (!value || /[^1-9A-HJ-NP-Za-km-z]/.test(value)) return null;
-  let digits: number[] = [];
+  const digits: number[] = [];
   for (const ch of value) {
     let carry = alphabet.indexOf(ch);
     if (carry < 0) return null;
@@ -52,9 +58,10 @@ function base58Bytes(value: string): Uint8Array | null {
       carry >>= 8;
     }
   }
-  for (const ch of value)
+  for (const ch of value) {
     if (ch === "1") digits.push(0);
     else break;
+  }
   return Uint8Array.from(digits.reverse());
 }
 function validWallet(value: string): boolean {
@@ -65,42 +72,122 @@ function validSignature(value: unknown): value is string {
   const bytes = typeof value === "string" ? base58Bytes(value) : null;
   return !!bytes && bytes.length === 64;
 }
-
+function parseConfiguredAssets(): {
+  assets: SolanaPayoutAsset[];
+  reason?: string;
+} {
+  const raw = env("SOLANA_PAYOUT_ASSETS");
+  if (!raw)
+    return {
+      assets: [],
+      reason:
+        "SOLANA_PAYOUT_ASSETS must list the allowed Solana payout tokens and their decimals and treasuries.",
+    };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { assets: [], reason: "SOLANA_PAYOUT_ASSETS must be valid JSON." };
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length > 50)
+    return {
+      assets: [],
+      reason: "SOLANA_PAYOUT_ASSETS must be a non-empty array of up to 50 assets.",
+    };
+  const assets: SolanaPayoutAsset[] = [];
+  const mints = new Set<string>();
+  for (const item of parsed) {
+    if (!item || typeof item !== "object")
+      return { assets: [], reason: "Each configured payout asset must be an object." };
+    const row = item as Record<string, unknown>;
+    const symbol = typeof row.symbol === "string" ? row.symbol.trim() : "";
+    const mint = typeof row.mint === "string" ? row.mint.trim() : "";
+    const decimals = row.decimals;
+    const treasuryWallet =
+      typeof row.treasuryWallet === "string" ? row.treasuryWallet.trim() : "";
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,15}$/.test(symbol))
+      return {
+        assets: [],
+        reason: "Each payout asset needs a short alphanumeric token symbol.",
+      };
+    if (!validWallet(mint))
+      return { assets: [], reason: `The configured ${symbol} mint is not a valid Solana public key.` };
+    if (!Number.isInteger(decimals) || (decimals as number) < 0 || (decimals as number) > 18)
+      return { assets: [], reason: `The configured ${symbol} decimals must be an integer from 0 to 18.` };
+    if (!validWallet(treasuryWallet))
+      return {
+        assets: [],
+        reason: `The configured ${symbol} treasury is not a valid Solana public key.`,
+      };
+    if (mints.has(mint))
+      return { assets: [], reason: "SOLANA_PAYOUT_ASSETS cannot contain a mint more than once." };
+    mints.add(mint);
+    assets.push({
+      symbol,
+      mint,
+      decimals: decimals as number,
+      network: SOLANA_MAINNET,
+      treasuryWallet,
+    });
+  }
+  return { assets };
+}
+export function getPayoutAssetOptions(): SolanaPayoutAssetOption[] {
+  const { assets } = parseConfiguredAssets();
+  return assets.map(({ symbol, mint, decimals, network }) => ({
+    symbol,
+    mint,
+    decimals,
+    network,
+  }));
+}
 export function getPayoutReadiness(): { enabled: boolean; reason: string } {
-  if (env("USD1_PAYOUTS_ENABLED") !== "true")
+  if (env("SOLANA_PAYOUTS_ENABLED") !== "true")
     return {
       enabled: false,
-      reason: "USD1 payouts are disabled (USD1_PAYOUTS_ENABLED must be true).",
+      reason: "Solana-token payouts are disabled (SOLANA_PAYOUTS_ENABLED must be true).",
     };
   if (!env("DATABASE_URL"))
     return {
       enabled: false,
       reason:
-        "USD1 payouts require a durable DATABASE_URL; local fallback databases are not eligible.",
+        "Solana-token payouts require a durable DATABASE_URL; local fallback databases are not eligible.",
     };
-  if (!isHttps(env("USD1_SIGNER_URL")))
-    return { enabled: false, reason: "USD1_SIGNER_URL must be an HTTPS URL." };
+  if (!isHttps(env("SOLANA_SIGNER_URL")))
+    return { enabled: false, reason: "SOLANA_SIGNER_URL must be an HTTPS URL." };
   if (
-    !env("USD1_PAYOUT_NAMESPACE") ||
-    !/^[a-zA-Z0-9_-]{3,80}$/.test(env("USD1_PAYOUT_NAMESPACE")!)
+    !env("SOLANA_PAYOUT_NAMESPACE") ||
+    !/^[a-zA-Z0-9_-]{3,80}$/.test(env("SOLANA_PAYOUT_NAMESPACE")!)
   )
     return {
       enabled: false,
       reason:
-        "USD1_PAYOUT_NAMESPACE must identify this deployment uniquely (3–80 letters, digits, underscores or dashes).",
+        "SOLANA_PAYOUT_NAMESPACE must identify this deployment uniquely (3–80 letters, digits, underscores or dashes).",
     };
-  if (!env("USD1_SIGNER_TOKEN"))
-    return { enabled: false, reason: "USD1_SIGNER_TOKEN is not configured." };
+  if (!env("SOLANA_SIGNER_TOKEN"))
+    return { enabled: false, reason: "SOLANA_SIGNER_TOKEN is not configured." };
   if (!isHttps(env("SOLANA_RPC_URL")))
     return { enabled: false, reason: "SOLANA_RPC_URL must be an HTTPS URL." };
-  if (!validWallet(env("USD1_TREASURY_WALLET") ?? ""))
-    return {
-      enabled: false,
-      reason: "USD1_TREASURY_WALLET is not a valid Solana public key.",
-    };
-  return { enabled: true, reason: "USD1 direct payouts are configured." };
+  const configured = parseConfiguredAssets();
+  if (!configured.assets.length)
+    return { enabled: false, reason: configured.reason ?? "No Solana payout tokens are configured." };
+  return { enabled: true, reason: "Solana-token payouts are configured." };
 }
-
+function configuredAssetMatches(
+  symbol: unknown,
+  mint: unknown,
+  decimals: unknown,
+  network: unknown,
+): SolanaPayoutAsset | undefined {
+  const { assets } = parseConfiguredAssets();
+  return assets.find(
+    (asset) =>
+      asset.symbol === symbol &&
+      asset.mint === mint &&
+      asset.decimals === Number(decimals) &&
+      asset.network === network,
+  );
+}
 async function requestJson(
   url: string,
   init: RequestInit,
@@ -139,8 +226,8 @@ async function signerRequest(
   key: string,
   payload?: object,
 ) {
-  const base = env("USD1_SIGNER_URL")!.replace(/\/+$/, "");
-  const token = env("USD1_SIGNER_TOKEN")!;
+  const base = env("SOLANA_SIGNER_URL")!.replace(/\/+$/, "");
+  const token = env("SOLANA_SIGNER_TOKEN")!;
   const headers: Record<string, string> = {
     authorization: `Bearer ${token}`,
     accept: "application/json",
@@ -159,6 +246,20 @@ async function rpc(method: string, params: unknown[]): Promise<any> {
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
   });
   return result.ok && !result.body?.error ? result.body?.result : null;
+}
+async function verifiedMintOnMainnet(asset: SolanaPayoutAsset): Promise<boolean> {
+  if ((await rpc("getGenesisHash", [])) !== MAINNET_GENESIS) return false;
+  const account = await rpc("getAccountInfo", [
+    asset.mint,
+    { encoding: "jsonParsed", commitment: "finalized" },
+  ]);
+  const value = account?.value;
+  return (
+    !!value &&
+    (value.owner === TOKEN_PROGRAM || value.owner === TOKEN_2022_PROGRAM) &&
+    value.data?.parsed?.type === "mint" &&
+    value.data?.parsed?.info?.decimals === asset.decimals
+  );
 }
 function decimal(value: unknown): bigint | null {
   try {
@@ -205,6 +306,9 @@ async function verifyFinalized(
   signature: string,
   recipient: string,
   amountUnits: string,
+  mint: string,
+  decimals: number,
+  network: string,
   treasury: string,
 ): Promise<boolean> {
   const expected = decimal(amountUnits);
@@ -212,7 +316,12 @@ async function verifyFinalized(
     expected === null ||
     !validSignature(signature) ||
     !validWallet(treasury) ||
-    !validWallet(recipient)
+    !validWallet(recipient) ||
+    !validWallet(mint) ||
+    !Number.isInteger(decimals) ||
+    decimals < 0 ||
+    decimals > 18 ||
+    network !== SOLANA_MAINNET
   )
     return false;
   if ((await rpc("getGenesisHash", [])) !== MAINNET_GENESIS) return false;
@@ -238,27 +347,23 @@ async function verifyFinalized(
     !tx.transaction.signatures.includes(signature)
   )
     return false;
-  const deltas = tokenDeltas(tx, treasury, recipient, USD1_MINT);
+  const deltas = tokenDeltas(tx, treasury, recipient, mint);
   if (!deltas || deltas.treasury !== -expected || deltas.recipient !== expected)
     return false;
   const balances = [
     ...(tx.meta?.preTokenBalances ?? []),
     ...(tx.meta?.postTokenBalances ?? []),
   ];
-  const ownerAt = (index: any) =>
-    balances.find((b: any) => b.accountIndex === index && b.mint === USD1_MINT)
-      ?.owner;
-  const mintAt = (index: any) =>
-    balances.find((b: any) => b.accountIndex === index)?.mint;
+  const mintBalances = balances.filter((b: any) => b.mint === mint);
   if (
-    balances.some(
-      (b: any) =>
-        b.mint === USD1_MINT &&
-        b.uiTokenAmount?.decimals !== undefined &&
-        b.uiTokenAmount.decimals !== USD1_DECIMALS,
-    )
+    mintBalances.length < 2 ||
+    mintBalances.some((b: any) => b.uiTokenAmount?.decimals !== decimals)
   )
     return false;
+  const ownerAt = (index: number) =>
+    balances.find((b: any) => b.accountIndex === index && b.mint === mint)?.owner;
+  const mintAt = (index: number) =>
+    balances.find((b: any) => b.accountIndex === index)?.mint;
   let exactTransfer = false;
   const walk = (instructions: any[]) => {
     for (const ix of instructions ?? []) {
@@ -271,26 +376,24 @@ async function verifyFinalized(
       if (p?.type !== "transfer" && p?.type !== "transferChecked") continue;
       const info = p.info ?? {};
       const amount = String(info.amount ?? info.tokenAmount?.amount ?? "");
-      const mint = info.mint ?? info.tokenAmount?.mint;
+      const instructionMint = info.mint ?? info.tokenAmount?.mint;
       const source = info.source;
       const destination = info.destination;
-      const sourceOwner = ownerAt(
-        keys.findIndex((k: any) => keyValue(k) === source),
-      );
-      const destOwner = ownerAt(
-        keys.findIndex((k: any) => keyValue(k) === destination),
-      );
       const sourceIndex = keys.findIndex((k: any) => keyValue(k) === source);
       const destinationIndex = keys.findIndex(
         (k: any) => keyValue(k) === destination,
       );
-      const mintOk = mint
-        ? mint === USD1_MINT
-        : mintAt(sourceIndex) === USD1_MINT &&
-          mintAt(destinationIndex) === USD1_MINT;
+      const sourceOwner = ownerAt(sourceIndex);
+      const destOwner = ownerAt(destinationIndex);
+      const mintOk = instructionMint
+        ? instructionMint === mint
+        : mintAt(sourceIndex) === mint && mintAt(destinationIndex) === mint;
+      const decimalsOk =
+        p.type !== "transferChecked" || info.tokenAmount?.decimals === decimals;
       if (
         amount === amountUnits &&
         mintOk &&
+        decimalsOk &&
         sourceOwner === treasury &&
         destOwner === recipient &&
         info.authority === treasury
@@ -299,12 +402,10 @@ async function verifyFinalized(
     }
   };
   walk(tx.transaction?.message?.instructions);
-  for (const inner of tx.meta?.innerInstructions ?? [])
-    walk(inner.instructions);
+  for (const inner of tx.meta?.innerInstructions ?? []) walk(inner.instructions);
   return exactTransfer;
 }
-
-const rowSelect = `id, submission_id, idempotency_key, creator_wallet, trunc(amount_units)::text as amount_units, token_mint, network, treasury_wallet, transaction_signature, status`;
+const rowSelect = `id, submission_id, idempotency_key, creator_wallet, trunc(amount_units)::text as amount_units, token_symbol, token_mint, token_decimals, network, treasury_wallet, transaction_signature, status`;
 async function closeIfVerified(
   sql: Sql,
   row: RequestRow,
@@ -315,6 +416,9 @@ async function closeIfVerified(
       signature,
       row.creator_wallet,
       row.amount_units,
+      row.token_mint,
+      Number(row.token_decimals),
+      row.network,
       row.treasury_wallet,
     ))
   )
@@ -334,7 +438,23 @@ async function closeIfVerified(
         "The transaction signature is already recorded against another payout; manual reconciliation is required.",
     };
   const closed = await sql.query<{ id: number }>(
-    `with inserted as (insert into payouts (user_id, submission_id, amount, reference, paid_at) select s.user_id, s.id, (d.amount_units::numeric / 1000000), $2, now() from direct_payout_requests d join submissions s on s.id=d.submission_id where d.id=$1 and d.status='processing' and d.transaction_signature=$2 and not exists (select 1 from payouts p where p.submission_id=d.submission_id) returning submission_id), marked as (update submissions s set status='paid', paid_at=now() from inserted i where s.id=i.submission_id returning s.id) update direct_payout_requests d set status='confirmed', confirmed_at=now(), updated_at=now() from marked m where d.id=$1 returning d.id`,
+    `with inserted as (
+       insert into payouts (user_id, submission_id, amount, reference, paid_at, token_symbol, token_mint, token_decimals, network)
+       select s.user_id, s.id,
+              (d.amount_units::numeric / power(10::numeric, d.token_decimals)),
+              $2, now(), d.token_symbol, d.token_mint, d.token_decimals, d.network
+       from direct_payout_requests d
+       join submissions s on s.id=d.submission_id
+       where d.id=$1 and d.status='processing' and d.transaction_signature=$2
+         and not exists (select 1 from payouts p where p.submission_id=d.submission_id)
+       returning submission_id
+     ), marked as (
+       update submissions s set status='paid', paid_at=now()
+       from inserted i where s.id=i.submission_id returning s.id
+     )
+     update direct_payout_requests d
+     set status='confirmed', confirmed_at=now(), updated_at=now()
+     from marked m where d.id=$1 returning d.id`,
     [row.id, signature],
   );
   if (!closed.length) {
@@ -351,7 +471,6 @@ async function closeIfVerified(
   }
   return { status: "paid" };
 }
-
 export async function paySubmission(
   sql: Sql,
   submissionId: number,
@@ -373,6 +492,38 @@ export async function paySubmission(
     )
   )[0];
   if (!row) {
+    const campaignAsset = (
+      await sql.query<{
+        payout_token_symbol: string;
+        payout_token_mint: string;
+        payout_token_decimals: number | string;
+        payout_network: string;
+      }>(
+        `select c.payout_token_symbol, c.payout_token_mint, c.payout_token_decimals, c.payout_network
+         from submissions s join campaigns c on c.id=s.campaign_id where s.id=$1`,
+        [submissionId],
+      )
+    )[0];
+    if (!campaignAsset)
+      return { status: "processing", message: "Submission was not found." };
+    const asset = configuredAssetMatches(
+      campaignAsset.payout_token_symbol,
+      campaignAsset.payout_token_mint,
+      campaignAsset.payout_token_decimals,
+      campaignAsset.payout_network,
+    );
+    if (!asset)
+      return {
+        status: "processing",
+        message:
+          "The campaign payout token is not in the configured Solana-token allowlist; no transfer was created.",
+      };
+    if (!(await verifiedMintOnMainnet(asset)))
+      return {
+        status: "processing",
+        message:
+          "The configured token mint or decimals could not be verified on Solana mainnet; no transfer was created.",
+      };
     row = await sql.transaction(async (tx) => {
       const locked = await tx.query<{
         id: number;
@@ -380,20 +531,61 @@ export async function paySubmission(
         payout_wallet_address: string;
         payout_wallet_status: string;
         suspended: boolean;
+        payout_token_symbol: string;
+        payout_token_mint: string;
+        payout_token_decimals: number | string;
+        payout_network: string;
       }>(
-        `select p.user_id, p.payout_wallet_address, p.payout_wallet_status, p.suspended from submissions s join profiles p on p.user_id=s.user_id where s.id=$1 for update of s, p`,
+        `select p.user_id, p.payout_wallet_address, p.payout_wallet_status, p.suspended,
+                c.payout_token_symbol, c.payout_token_mint, c.payout_token_decimals, c.payout_network
+         from submissions s join profiles p on p.user_id=s.user_id
+         join campaigns c on c.id=s.campaign_id
+         where s.id=$1 for update of s, p, c`,
         [submissionId],
       );
       if (!locked.length) return undefined;
+      const current = locked[0];
+      if (
+        current.payout_token_symbol !== asset.symbol ||
+        current.payout_token_mint !== asset.mint ||
+        Number(current.payout_token_decimals) !== asset.decimals ||
+        current.payout_network !== asset.network
+      )
+        return undefined;
       const claimed = await tx.query<RequestRow>(
-        `with eligible as (select s.id, p.payout_wallet_address as wallet, (s.estimated_payout::numeric * 1000000)::numeric as units from submissions s join profiles p on p.user_id=s.user_id where s.id=$1 and s.status='approved' and s.payout_proof_status='accepted' and s.verification_status='verified' and s.flagged=false and s.views >= s.min_views and nullif(trim(s.analytics_proof_url),'') is not null and p.payout_wallet_status='verified' and p.suspended=false and nullif(trim(p.payout_wallet_address),'') is not null and s.estimated_payout > 0 and not exists (select 1 from payouts old where old.submission_id=s.id) and not exists (select 1 from payout_items old where old.submission_id=s.id)), claimed as (insert into direct_payout_requests (submission_id,idempotency_key,creator_wallet,amount_units,token_mint,network,treasury_wallet,requesting_admin) select id, $6 || ':vuze-direct:' || id::text, wallet, units, $2, $3, $4, $5 from eligible on conflict (submission_id) do nothing returning ${rowSelect}) update submissions s set status='payment_processing' from claimed c where s.id=c.submission_id returning c.*`,
+        `with eligible as (
+           select s.id, p.payout_wallet_address as wallet,
+                  round(s.estimated_payout::numeric * power(10::numeric, $8::int)) as units
+           from submissions s
+           join profiles p on p.user_id=s.user_id
+           join campaigns c on c.id=s.campaign_id
+           where s.id=$1 and s.status='approved' and s.payout_proof_status='accepted'
+             and s.verification_status='verified' and s.flagged=false and s.views >= s.min_views
+             and nullif(trim(s.analytics_proof_url),'') is not null
+             and p.payout_wallet_status='verified' and p.suspended=false
+             and nullif(trim(p.payout_wallet_address),'') is not null
+             and s.estimated_payout > 0
+             and c.payout_token_symbol=$7 and c.payout_token_mint=$2
+             and c.payout_token_decimals=$8 and c.payout_network=$3
+             and not exists (select 1 from payouts old where old.submission_id=s.id)
+             and not exists (select 1 from payout_items old where old.submission_id=s.id)
+         ), claimed as (
+           insert into direct_payout_requests
+             (submission_id,idempotency_key,creator_wallet,amount_units,token_symbol,token_mint,token_decimals,network,treasury_wallet,requesting_admin)
+           select id, $6 || ':vuze-direct:' || id::text, wallet, units, $7, $2, $8, $3, $4, $5
+           from eligible on conflict (submission_id) do nothing returning ${rowSelect}
+         )
+         update submissions s set status='payment_processing'
+         from claimed c where s.id=c.submission_id returning c.*`,
         [
           submissionId,
-          USD1_MINT,
-          USD1_NETWORK,
-          env("USD1_TREASURY_WALLET"),
+          asset.mint,
+          asset.network,
+          asset.treasuryWallet,
           adminId,
-          env("USD1_PAYOUT_NAMESPACE"),
+          env("SOLANA_PAYOUT_NAMESPACE"),
+          asset.symbol,
+          asset.decimals,
         ],
       );
       if (claimed.length) {
@@ -411,13 +603,18 @@ export async function paySubmission(
   if (!row)
     return {
       status: "processing",
-      message: "Submission is not payout-eligible or is already paid.",
+      message:
+        "Submission is not payout-eligible, its campaign token changed, or it is already paid.",
     };
   if (
-    row.token_mint !== USD1_MINT ||
-    row.network !== USD1_NETWORK ||
     !validWallet(row.creator_wallet) ||
-    !validWallet(row.treasury_wallet)
+    !validWallet(row.treasury_wallet) ||
+    !validWallet(row.token_mint) ||
+    !Number.isInteger(Number(row.token_decimals)) ||
+    Number(row.token_decimals) < 0 ||
+    Number(row.token_decimals) > 18 ||
+    row.network !== SOLANA_MAINNET ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,15}$/.test(row.token_symbol)
   ) {
     await sql.query(
       `update direct_payout_requests set status='blocked', updated_at=now() where id=$1 and status='processing'`,
@@ -447,9 +644,10 @@ export async function paySubmission(
       const sent = await signerRequest("POST", row.idempotency_key, {
         idempotencyKey: row.idempotency_key,
         destination: row.creator_wallet,
-        mint: USD1_MINT,
+        treasuryWallet: row.treasury_wallet,
+        mint: row.token_mint,
         amountUnits: row.amount_units,
-        network: USD1_NETWORK,
+        network: row.network,
       });
       signature =
         sent.ok && validSignature(sent.body?.signature)
@@ -463,7 +661,9 @@ export async function paySubmission(
           "Signer has no known signature; no new transfer will be created. Manual reconciliation is required.",
       };
     const cas = await sql.query<RequestRow>(
-      `update direct_payout_requests set transaction_signature=$2, updated_at=now() where id=$1 and transaction_signature is null and status='processing' returning ${rowSelect}`,
+      `update direct_payout_requests set transaction_signature=$2, updated_at=now()
+       where id=$1 and transaction_signature is null and status='processing'
+       returning ${rowSelect}`,
       [row.id, signature],
     );
     if (cas[0]) row = cas[0];

@@ -96,7 +96,10 @@ function CampaignDetail() {
           <CardContent className="space-y-3 text-sm">
             <div>
               <p className="text-muted-foreground">Payout</p>
-              <p className="mt-1 font-medium">{c.payoutLabel}</p>
+              <p className="mt-1 font-medium">{c.payoutLabel} · {c.payoutTokenSymbol}</p>
+              <p className="mt-1 break-all text-xs text-muted-foreground">
+                Solana mint {c.payoutTokenMint.slice(0, 5)}…{c.payoutTokenMint.slice(-5)} · {c.payoutTokenDecimals} decimals
+              </p>
             </div>
             <div>
               <p className="text-muted-foreground">Deadline</p>

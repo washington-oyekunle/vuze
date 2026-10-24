@@ -11,7 +11,7 @@ import {
   adminPaySubmission,
   getMyProfile,
 } from "@/lib/vuze/server";
-import { money } from "@/lib/utils";
+import { tokenAmount } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 export const Route = createFileRoute("/admin/payouts")({
   component: AdminPayouts,
@@ -104,7 +104,7 @@ function AdminPayouts() {
                     {s.creatorName} · {s.campaignTitle}
                   </span>
                   <span className="text-xs text-muted-foreground">
-                    {money(s.estimatedPayout)} · {s.status}
+                    {tokenAmount(s.estimatedPayout, s.payoutTokenSymbol, s.payoutTokenDecimals, s.payoutTokenMint)} · {s.status}
                   </span>
                 </Link>
                 <Button
@@ -116,7 +116,7 @@ function AdminPayouts() {
                     ? "Processing…"
                     : s.status === "payment_processing"
                       ? "Check payment"
-                      : "Pay USD1"}
+                      : `Pay ${s.payoutTokenSymbol}`}
                 </Button>
               </li>
             ))}
@@ -141,7 +141,7 @@ function AdminPayouts() {
                 <span>
                   {p.creatorName} · {p.campaignTitle}
                 </span>
-                <span className="tabular-nums">{money(p.amount)}</span>
+                <span className="tabular-nums">{tokenAmount(p.amount, p.tokenSymbol, p.tokenDecimals ?? 9, p.tokenMint)}</span>
               </li>
             ))}
           </ul>

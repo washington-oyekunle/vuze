@@ -16,6 +16,13 @@ export type ProfileRole = "creator" | "admin";
 export type PayoutWalletStatus =
   "not_set" | "pending" | "verified" | "rejected";
 
+export type TokenAmount = {
+  symbol: string;
+  mint: string | null;
+  decimals: number | null;
+  amount: number;
+};
+
 export type Profile = {
   userId: string;
   displayName: string;
@@ -35,8 +42,8 @@ export type Profile = {
 export type PayoutBatch = {
   id: number;
   batchDate: string;
-  asset: "USD1";
-  network: "solana-mainnet";
+  asset: string;
+  network: string;
   tokenMint: string;
   tokenDecimals: number;
   status: "draft" | "approved" | "processing" | "paid" | "failed";
@@ -57,6 +64,10 @@ export type Campaign = {
   payoutLabel: string;
   payoutKind: string;
   payoutRate: number;
+  payoutTokenSymbol: string;
+  payoutTokenMint: string;
+  payoutTokenDecimals: number;
+  payoutNetwork: string;
   deadline: string | null;
   organicOnly: boolean;
   maxSubmissions: number | null;
@@ -104,6 +115,10 @@ export type Submission = {
   shares: number;
   status: SubmissionStatus;
   estimatedPayout: number;
+  payoutTokenSymbol: string;
+  payoutTokenMint: string;
+  payoutTokenDecimals: number;
+  payoutNetwork: string;
   adminNotes: string;
   payoutProofUrl: string;
   payoutProofStatus: PayoutProofStatus;
@@ -143,6 +158,10 @@ export type AssetItem = {
 export type Payout = {
   id: number;
   amount: number;
+  tokenSymbol: string;
+  tokenMint: string | null;
+  tokenDecimals: number | null;
+  network: string | null;
   reference: string;
   paidAt: string;
   submissionId: number | null;
@@ -153,14 +172,14 @@ export type DashboardStats = {
   activeCampaigns: number;
   pending: number;
   approved: number;
-  earned: number;
-  pendingPay: number;
+  earnedByAsset: TokenAmount[];
+  pendingPayByAsset: TokenAmount[];
 };
 
 export type AdminOverview = {
   pendingReview: number;
   liveCampaigns: number;
-  paidThisMonth: number;
+  paidThisMonthByAsset: TokenAmount[];
   flagged: number;
   creators: number;
 };

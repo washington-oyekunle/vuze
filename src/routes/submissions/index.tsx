@@ -5,7 +5,7 @@ import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { useQuery } from "@tanstack/react-query";
 import { listMySubmissions } from "@/lib/vuze/server";
 import { SubmissionStatusBadge } from "@/components/status-badge";
-import { compactNumber, money } from "@/lib/utils";
+import { compactNumber, tokenAmount } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
 export const Route = createFileRoute("/submissions/")({ component: SubmissionsPage });
@@ -42,7 +42,7 @@ function SubmissionsPage() {
                   <div className="min-w-0">
                     <p className="truncate text-sm">{s.campaignTitle}</p>
                     <p className="text-xs text-muted-foreground tabular-nums">
-                      {compactNumber(s.views)} views · est. {money(s.estimatedPayout)}
+                      {compactNumber(s.views)} views · est. {tokenAmount(s.estimatedPayout, s.payoutTokenSymbol, s.payoutTokenDecimals, s.payoutTokenMint)}
                     </p>
                   </div>
                   <SubmissionStatusBadge status={s.status} />

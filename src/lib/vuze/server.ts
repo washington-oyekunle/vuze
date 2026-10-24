@@ -8,7 +8,11 @@ import {
   retryVerification,
   reviewSubmission,
 } from "./submission-service.server";
-import { getPayoutReadiness, paySubmission } from "./payout-service.server";
+import {
+  getPayoutAssetOptions,
+  getPayoutReadiness,
+  paySubmission,
+} from "./payout-service.server";
 import { reviewPayoutWallet } from "./payout-wallet-review.server";
 import type {
   AdminOverview,
@@ -22,11 +26,8 @@ import type {
   Profile,
   Submission,
   SubmissionReview,
+  TokenAmount,
 } from "./types";
-
-export const USD1_SOLANA_MINT = "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB";
-export const USD1_DECIMALS = 6;
-export const USD1_NETWORK = "solana-mainnet" as const;
 
 function mapCampaign(r: Record<string, unknown>): Campaign {
   return {
@@ -41,6 +42,10 @@ function mapCampaign(r: Record<string, unknown>): Campaign {
     payoutLabel: String(r.payout_label),
     payoutKind: String(r.payout_kind),
     payoutRate: num(r.payout_rate),
+    payoutTokenSymbol: String(r.payout_token_symbol ?? "UNKNOWN"),
+    payoutTokenMint: String(r.payout_token_mint ?? ""),
+    payoutTokenDecimals: num(r.payout_token_decimals),
+    payoutNetwork: String(r.payout_network ?? "solana-mainnet"),
     deadline: r.deadline ? String(r.deadline) : null,
     organicOnly: Boolean(r.organic_only),
     maxSubmissions: r.max_submissions == null ? null : num(r.max_submissions),
@@ -93,6 +98,10 @@ function mapSubmission(r: Record<string, unknown>): Submission {
     shares: num(r.shares),
     status: r.status as Submission["status"],
     estimatedPayout: num(r.estimated_payout),
+    payoutTokenSymbol: String(r.payout_token_symbol ?? "UNKNOWN"),
+    payoutTokenMint: String(r.payout_token_mint ?? ""),
+    payoutTokenDecimals: num(r.payout_token_decimals),
+    payoutNetwork: String(r.payout_network ?? "solana-mainnet"),
     adminNotes: String(r.admin_notes ?? ""),
     payoutProofUrl: String(r.payout_proof_url ?? ""),
     payoutProofStatus: (r.payout_proof_status ??
@@ -115,6 +124,15 @@ function mapSubmissionReview(r: Record<string, unknown>): SubmissionReview {
     notes: String(r.notes ?? ""),
     createdAt: String(r.created_at),
   };
+}
+
+function mapTokenAmounts(rows: Record<string, unknown>[]): TokenAmount[] {
+  return rows.map((r) => ({
+    symbol: String(r.token_symbol ?? "UNKNOWN"),
+    mint: r.token_mint ? String(r.token_mint) : null,
+    decimals: r.token_decimals == null ? null : num(r.token_decimals),
+    amount: num(r.amount),
+  }));
 }
 
 async function ensureProfile(userId: string, displayName?: string) {
@@ -155,7 +173,9 @@ async function requireAdmin(userId: string) {
 
 const campaignSelect = `
   c.id, c.title, c.brand, c.type, c.status, c.summary, c.brief, c.requirements,
-  c.payout_label, c.payout_kind, c.payout_rate, c.deadline, c.organic_only,
+  c.payout_label, c.payout_kind, c.payout_rate,
+  c.payout_token_symbol, c.payout_token_mint, c.payout_token_decimals, c.payout_network,
+  c.deadline, c.organic_only,
   c.max_submissions, c.min_views, (select count(*)::int from submissions s where s.campaign_id = c.id) as submission_count
 `;
 
@@ -178,6 +198,13 @@ export const getCampaign = createServerFn({ method: "GET" })
       [data.id],
     );
     return list[0] ? mapCampaign(list[0]) : null;
+  });
+
+export const adminGetPayoutAssets = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    await requireAdmin(context.userId);
+    return getPayoutAssetOptions();
   });
 
 const applicationSelect = `
@@ -376,17 +403,27 @@ export const getDashboard = createServerFn({ method: "GET" })
       const approved = await sql<{
         c: number;
       }>`select count(*)::int as c from submissions where user_id = ${context.userId} and status in ('approved', 'paid')`;
-      const earned = await sql<{
-        s: string;
-      }>`select coalesce(sum(amount),0)::text as s from payouts where user_id = ${context.userId}`;
-      const pendingPay = await sql<{
-        s: string;
-      }>`select coalesce(sum(estimated_payout),0)::text as s from submissions where user_id = ${context.userId} and status = 'approved'`;
+      const earned = await sql<Record<string, unknown>>`
+        select token_symbol, token_mint, token_decimals, sum(amount)::text as amount
+        from payouts where user_id = ${context.userId}
+        group by token_symbol, token_mint, token_decimals order by token_symbol, token_mint
+      `;
+      const pendingPay = await sql<Record<string, unknown>>`
+        select c.payout_token_symbol as token_symbol, c.payout_token_mint as token_mint,
+               c.payout_token_decimals as token_decimals,
+               sum(s.estimated_payout)::text as amount
+        from submissions s join campaigns c on c.id = s.campaign_id
+        where s.user_id = ${context.userId} and s.status = 'approved'
+        group by c.payout_token_symbol, c.payout_token_mint, c.payout_token_decimals
+        order by c.payout_token_symbol, c.payout_token_mint
+      `;
       const liveCount = await sql<{
         c: number;
       }>`select count(*)::int as c from campaigns where status = 'live'`;
       const recentRows = await sql.query<Record<string, unknown>>(
-        `select s.*, c.title as campaign_title, c.brand as campaign_brand, p.display_name as creator_name
+        `select s.*, c.title as campaign_title, c.brand as campaign_brand,
+                c.payout_token_symbol, c.payout_token_mint, c.payout_token_decimals, c.payout_network,
+                p.display_name as creator_name
        from submissions s
        join campaigns c on c.id = s.campaign_id
        join profiles p on p.user_id = s.user_id
@@ -402,8 +439,8 @@ export const getDashboard = createServerFn({ method: "GET" })
           activeCampaigns: num(liveCount[0]?.c),
           pending: num(pending[0]?.c),
           approved: num(approved[0]?.c),
-          earned: num(earned[0]?.s),
-          pendingPay: num(pendingPay[0]?.s),
+          earnedByAsset: mapTokenAmounts(earned),
+          pendingPayByAsset: mapTokenAmounts(pendingPay),
         },
         recent: recentRows.map(mapSubmission),
         live: liveRows.map(mapCampaign),
@@ -432,7 +469,9 @@ export const listMySubmissions = createServerFn({ method: "GET" })
   .handler(async ({ context }) => {
     const sql = await getSql();
     const rows = await sql.query<Record<string, unknown>>(
-      `select s.*, c.title as campaign_title, c.brand as campaign_brand, p.display_name as creator_name
+      `select s.*, c.title as campaign_title, c.brand as campaign_brand,
+              c.payout_token_symbol, c.payout_token_mint, c.payout_token_decimals, c.payout_network,
+              p.display_name as creator_name
        from submissions s
        join campaigns c on c.id = s.campaign_id
        join profiles p on p.user_id = s.user_id
@@ -449,7 +488,9 @@ export const getMySubmission = createServerFn({ method: "GET" })
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     const rows = await sql.query<Record<string, unknown>>(
-      `select s.*, c.title as campaign_title, c.brand as campaign_brand, p.display_name as creator_name
+      `select s.*, c.title as campaign_title, c.brand as campaign_brand,
+              c.payout_token_symbol, c.payout_token_mint, c.payout_token_decimals, c.payout_network,
+              p.display_name as creator_name
        from submissions s
        join campaigns c on c.id = s.campaign_id
        join profiles p on p.user_id = s.user_id
@@ -524,28 +565,45 @@ export const getEarnings = createServerFn({ method: "GET" })
   .handler(
     async ({
       context,
-    }): Promise<{ payouts: Payout[]; pending: number; paid: number }> => {
+    }): Promise<{
+      payouts: Payout[];
+      pendingByAsset: TokenAmount[];
+      paidByAsset: TokenAmount[];
+    }> => {
       const sql = await getSql();
       const payouts = await sql<Record<string, unknown>>`
-      select p.id, p.amount, p.reference, p.paid_at, p.submission_id, c.title as campaign_title
+      select p.id, p.amount, p.token_symbol, p.token_mint, p.token_decimals, p.network,
+             p.reference, p.paid_at, p.submission_id, c.title as campaign_title
       from payouts p
       left join submissions s on s.id = p.submission_id
       left join campaigns c on c.id = s.campaign_id
       where p.user_id = ${context.userId}
       order by p.paid_at desc
     `;
-      const pending = await sql<{
-        s: string;
-      }>`select coalesce(sum(estimated_payout),0)::text as s from submissions where user_id = ${context.userId} and status = 'approved'`;
-      const paid = await sql<{
-        s: string;
-      }>`select coalesce(sum(amount),0)::text as s from payouts where user_id = ${context.userId}`;
+      const pending = await sql<Record<string, unknown>>`
+        select c.payout_token_symbol as token_symbol, c.payout_token_mint as token_mint,
+               c.payout_token_decimals as token_decimals,
+               sum(s.estimated_payout)::text as amount
+        from submissions s join campaigns c on c.id = s.campaign_id
+        where s.user_id = ${context.userId} and s.status = 'approved'
+        group by c.payout_token_symbol, c.payout_token_mint, c.payout_token_decimals
+        order by c.payout_token_symbol, c.payout_token_mint
+      `;
+      const paid = await sql<Record<string, unknown>>`
+        select token_symbol, token_mint, token_decimals, sum(amount)::text as amount
+        from payouts where user_id = ${context.userId}
+        group by token_symbol, token_mint, token_decimals order by token_symbol, token_mint
+      `;
       return {
-        pending: num(pending[0]?.s),
-        paid: num(paid[0]?.s),
+        pendingByAsset: mapTokenAmounts(pending),
+        paidByAsset: mapTokenAmounts(paid),
         payouts: payouts.map((r) => ({
           id: num(r.id),
           amount: num(r.amount),
+          tokenSymbol: String(r.token_symbol ?? "UNKNOWN"),
+          tokenMint: r.token_mint ? String(r.token_mint) : null,
+          tokenDecimals: r.token_decimals == null ? null : num(r.token_decimals),
+          network: r.network ? String(r.network) : null,
           reference: String(r.reference ?? ""),
           paidAt: String(r.paid_at),
           submissionId: r.submission_id == null ? null : num(r.submission_id),
@@ -600,9 +658,11 @@ export const getAdminOverview = createServerFn({ method: "GET" })
     const live = await sql<{
       c: number;
     }>`select count(*)::int as c from campaigns where status = 'live'`;
-    const paid = await sql<{
-      s: string;
-    }>`select coalesce(sum(amount),0)::text as s from payouts where paid_at >= date_trunc('month', now())`;
+    const paid = await sql<Record<string, unknown>>`
+      select token_symbol, token_mint, token_decimals, sum(amount)::text as amount
+      from payouts where paid_at >= date_trunc('month', now())
+      group by token_symbol, token_mint, token_decimals order by token_symbol, token_mint
+    `;
     const flagged = await sql<{
       c: number;
     }>`select count(*)::int as c from submissions where flagged = true`;
@@ -612,7 +672,7 @@ export const getAdminOverview = createServerFn({ method: "GET" })
     return {
       pendingReview: num(pending[0]?.c),
       liveCampaigns: num(live[0]?.c),
-      paidThisMonth: num(paid[0]?.s),
+      paidThisMonthByAsset: mapTokenAmounts(paid),
       flagged: num(flagged[0]?.c),
       creators: num(creators[0]?.c),
     };
@@ -671,7 +731,9 @@ export const adminListSubmissions = createServerFn({ method: "GET" })
     await requireAdmin(context.userId);
     const sql = await getSql();
     const rows = await sql.query<Record<string, unknown>>(
-      `select s.*, c.title as campaign_title, c.brand as campaign_brand, p.display_name as creator_name
+      `select s.*, c.title as campaign_title, c.brand as campaign_brand,
+              c.payout_token_symbol, c.payout_token_mint, c.payout_token_decimals, c.payout_network,
+              p.display_name as creator_name
        from submissions s
        join campaigns c on c.id = s.campaign_id
        join profiles p on p.user_id = s.user_id
@@ -690,7 +752,9 @@ export const adminGetSubmission = createServerFn({ method: "GET" })
     await requireAdmin(context.userId);
     const sql = await getSql();
     const rows = await sql.query<Record<string, unknown>>(
-      `select s.*, c.title as campaign_title, c.brand as campaign_brand, p.display_name as creator_name
+      `select s.*, c.title as campaign_title, c.brand as campaign_brand,
+              c.payout_token_symbol, c.payout_token_mint, c.payout_token_decimals, c.payout_network,
+              p.display_name as creator_name
        from submissions s
        join campaigns c on c.id = s.campaign_id
        join profiles p on p.user_id = s.user_id
@@ -807,7 +871,7 @@ export const adminPrepareUsd1Batch = createServerFn({ method: "POST" })
   .handler(async ({ context }): Promise<PayoutBatch> => {
     await requireAdmin(context.userId);
     throw new Error(
-      "Friday batches have been replaced by per-entry USD1 payouts.",
+      "Friday batches are retired; payouts are now per submission in the campaign token.",
     );
   });
 
@@ -829,7 +893,7 @@ export const adminMarkPaid = createServerFn({ method: "POST" })
   .handler(async ({ context }) => {
     await requireAdmin(context.userId);
     throw new Error(
-      "Manual mark-paid is disabled. Only a finalized, verified USD1 transfer closes an entry.",
+      "Manual mark-paid is disabled. Only a finalized, verified Solana-token transfer closes an entry.",
     );
   });
 
@@ -839,7 +903,8 @@ export const adminListPayouts = createServerFn({ method: "GET" })
     await requireAdmin(context.userId);
     const sql = await getSql();
     const rows = await sql<Record<string, unknown>>`
-      select p.id, p.user_id, p.amount, p.reference, p.paid_at, p.submission_id,
+      select p.id, p.user_id, p.amount, p.token_symbol, p.token_mint, p.token_decimals, p.network,
+             p.reference, p.paid_at, p.submission_id,
              pr.display_name as creator_name, c.title as campaign_title
       from payouts p
       left join profiles pr on pr.user_id = p.user_id
@@ -848,7 +913,9 @@ export const adminListPayouts = createServerFn({ method: "GET" })
       order by p.paid_at desc
     `;
     const pending = await sql.query<Record<string, unknown>>(
-      `select s.*, c.title as campaign_title, c.brand as campaign_brand, p.display_name as creator_name
+      `select s.*, c.title as campaign_title, c.brand as campaign_brand,
+              c.payout_token_symbol, c.payout_token_mint, c.payout_token_decimals, c.payout_network,
+              p.display_name as creator_name
        from submissions s
        join campaigns c on c.id = s.campaign_id
        join profiles p on p.user_id = s.user_id
@@ -861,6 +928,10 @@ export const adminListPayouts = createServerFn({ method: "GET" })
         userId: String(r.user_id),
         creatorName: String(r.creator_name ?? ""),
         amount: num(r.amount),
+        tokenSymbol: String(r.token_symbol ?? "UNKNOWN"),
+        tokenMint: r.token_mint ? String(r.token_mint) : null,
+        tokenDecimals: r.token_decimals == null ? null : num(r.token_decimals),
+        network: r.network ? String(r.network) : null,
         reference: String(r.reference ?? ""),
         paidAt: String(r.paid_at),
         submissionId: r.submission_id == null ? null : num(r.submission_id),
@@ -878,11 +949,20 @@ export const adminListCreators = createServerFn({ method: "GET" })
     const rows = await sql<Record<string, unknown>>`
       select p.*,
         (select count(*)::int from submissions s where s.user_id = p.user_id) as submissions,
-        (select coalesce(sum(amount),0)::text from payouts x where x.user_id = p.user_id) as earned
-        , p.payout_wallet_address, p.payout_wallet_status
+        p.payout_wallet_address, p.payout_wallet_status
       from profiles p
       order by p.created_at desc
     `;
+    const totals = await sql<Record<string, unknown>>`
+      select user_id, token_symbol, token_mint, token_decimals, sum(amount)::text as amount
+      from payouts group by user_id, token_symbol, token_mint, token_decimals
+      order by user_id, token_symbol, token_mint
+    `;
+    const totalsByUser = new Map<string, Record<string, unknown>[]>();
+    for (const total of totals) {
+      const userId = String(total.user_id);
+      totalsByUser.set(userId, [...(totalsByUser.get(userId) ?? []), total]);
+    }
     return rows.map((r) => ({
       userId: String(r.user_id),
       displayName: String(r.display_name),
@@ -891,7 +971,7 @@ export const adminListCreators = createServerFn({ method: "GET" })
       organicVerified: Boolean(r.organic_verified),
       suspended: Boolean(r.suspended),
       submissions: num(r.submissions),
-      earned: num(r.earned),
+      earnedByAsset: mapTokenAmounts(totalsByUser.get(String(r.user_id)) ?? []),
       payoutWalletAddress: r.payout_wallet_address
         ? String(r.payout_wallet_address)
         : null,
@@ -939,13 +1019,40 @@ export const adminSaveCampaign = createServerFn({ method: "POST" })
       payoutLabel: z.string().min(2),
       payoutKind: z.enum(["per_1k", "flat"]),
       payoutRate: z.number().min(0),
+      payoutTokenSymbol: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,15}$/),
+      payoutTokenMint: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/),
+      payoutTokenDecimals: z.number().int().min(0).max(18),
       organicOnly: z.boolean(),
     }),
   )
   .handler(async ({ context, data }) => {
     await requireAdmin(context.userId);
     const sql = await getSql();
+    const asset = getPayoutAssetOptions().find(
+      (candidate) =>
+        candidate.symbol === data.payoutTokenSymbol &&
+        candidate.mint === data.payoutTokenMint &&
+        candidate.decimals === data.payoutTokenDecimals,
+    );
+    if (!asset)
+      throw new Error("Choose a payout token from the configured Solana allowlist.");
     if (data.id) {
+      const existing = await sql<{
+        payout_token_symbol: string;
+        payout_token_mint: string;
+        payout_token_decimals: number;
+        payout_network: string;
+      }>`select payout_token_symbol, payout_token_mint, payout_token_decimals, payout_network from campaigns where id = ${data.id}`;
+      if (!existing[0]) throw new Error("Campaign not found");
+      const submissions = await sql<{ count: number }>`select count(*)::int as count from submissions where campaign_id = ${data.id}`;
+      if (
+        num(submissions[0]?.count) > 0 &&
+        (existing[0].payout_token_symbol !== asset.symbol ||
+          existing[0].payout_token_mint !== asset.mint ||
+          num(existing[0].payout_token_decimals) !== asset.decimals ||
+          existing[0].payout_network !== asset.network)
+      )
+        throw new Error("A campaign's payout token cannot change after submissions exist.");
       await sql`
         update campaigns set
           title = ${data.title},
@@ -958,6 +1065,10 @@ export const adminSaveCampaign = createServerFn({ method: "POST" })
           payout_label = ${data.payoutLabel},
           payout_kind = ${data.payoutKind},
           payout_rate = ${data.payoutRate},
+          payout_token_symbol = ${asset.symbol},
+          payout_token_mint = ${asset.mint},
+          payout_token_decimals = ${asset.decimals},
+          payout_network = ${asset.network},
           organic_only = ${data.organicOnly}
         where id = ${data.id}
       `;
@@ -966,11 +1077,13 @@ export const adminSaveCampaign = createServerFn({ method: "POST" })
     const rows = await sql<{ id: number }>`
       insert into campaigns (
         title, brand, type, status, summary, brief, requirements,
-        payout_label, payout_kind, payout_rate, organic_only, created_by
+        payout_label, payout_kind, payout_rate, payout_token_symbol,
+        payout_token_mint, payout_token_decimals, payout_network, organic_only, created_by
       ) values (
         ${data.title}, ${data.brand}, ${data.type}, ${data.status}, ${data.summary},
         ${data.brief}, ${data.requirements}, ${data.payoutLabel}, ${data.payoutKind},
-        ${data.payoutRate}, ${data.organicOnly}, ${context.userId}
+        ${data.payoutRate}, ${asset.symbol}, ${asset.mint}, ${asset.decimals},
+        ${asset.network}, ${data.organicOnly}, ${context.userId}
       ) returning id
     `;
     return { id: num(rows[0]?.id) };

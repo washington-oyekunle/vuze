@@ -94,7 +94,7 @@ function Home() {
                     <h3 className="mt-1 font-medium">{c.title}</h3>
                   </div>
                   <p className="line-clamp-3 text-sm text-muted-foreground">{c.summary}</p>
-                  <p className="mt-auto text-sm">{c.payoutLabel}</p>
+                  <p className="mt-auto text-sm">{c.payoutLabel} · {c.payoutTokenSymbol}</p>
                 </CardContent>
               </Card>
             </Link>

@@ -106,7 +106,7 @@ function SubmitPage() {
               >
                 {live.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.brand} — {c.title}
+                    {c.brand} — {c.title} · {c.payoutTokenSymbol}
                   </option>
                 ))}
               </select>

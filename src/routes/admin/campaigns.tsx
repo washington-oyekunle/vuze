@@ -3,7 +3,7 @@ import { AppShell, PageHeader } from "@/components/app-shell";
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { useQuery } from "@tanstack/react-query";
-import { adminSaveCampaign, getMyProfile, listCampaigns } from "@/lib/vuze/server";
+import { adminGetPayoutAssets, adminSaveCampaign, getMyProfile, listCampaigns } from "@/lib/vuze/server";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +20,7 @@ function AdminCampaigns() {
   const { user, isPending } = useCurrentUserState();
   const me = useQuery({ queryKey: ["me"], queryFn: () => getMyProfile(), enabled: !!user });
   const q = useQuery({ queryKey: ["campaigns"], queryFn: () => listCampaigns(), enabled: me.data?.role === "admin" });
+  const payoutAssets = useQuery({ queryKey: ["admin-payout-assets"], queryFn: () => adminGetPayoutAssets(), enabled: me.data?.role === "admin" });
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [brand, setBrand] = useState("");
@@ -31,6 +32,8 @@ function AdminCampaigns() {
   const [payoutLabel, setPayoutLabel] = useState("");
   const [payoutKind, setPayoutKind] = useState<"per_1k" | "flat">("per_1k");
   const [payoutRate, setPayoutRate] = useState("4");
+  const [payoutTokenMint, setPayoutTokenMint] = useState("");
+  const selectedAsset = (payoutAssets.data ?? []).find((asset) => asset.mint === payoutTokenMint) ?? payoutAssets.data?.[0];
 
   if (isPending) return <AppShell><p className="text-sm text-muted-foreground">Loading…</p></AppShell>;
   if (!user) return <RedirectToSignIn to="/login" />;
@@ -39,6 +42,7 @@ function AdminCampaigns() {
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
     try {
+      if (!selectedAsset) throw new Error("No payout tokens are configured.");
       await adminSaveCampaign({
         data: {
           title,
@@ -51,6 +55,9 @@ function AdminCampaigns() {
           payoutLabel,
           payoutKind,
           payoutRate: Number(payoutRate),
+          payoutTokenSymbol: selectedAsset.symbol,
+          payoutTokenMint: selectedAsset.mint,
+          payoutTokenDecimals: selectedAsset.decimals,
           organicOnly: true,
         },
       });
@@ -97,12 +104,33 @@ function AdminCampaigns() {
               </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="space-y-1.5"><Label>Payout label</Label><Input value={payoutLabel} onChange={(e) => setPayoutLabel(e.target.value)} required /></div>
-                <div className="space-y-1.5"><Label>Rate</Label><Input value={payoutRate} onChange={(e) => setPayoutRate(e.target.value)} /></div>
+                <div className="space-y-1.5"><Label>Rate (token units)</Label><Input value={payoutRate} onChange={(e) => setPayoutRate(e.target.value)} /></div>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Payout token</Label>
+                <select
+                  className="h-11 w-full rounded-lg border border-border bg-secondary px-3 text-sm"
+                  value={payoutTokenMint || selectedAsset?.mint || ""}
+                  onChange={(e) => setPayoutTokenMint(e.target.value)}
+                  disabled={!payoutAssets.data?.length}
+                  required
+                >
+                  {(payoutAssets.data ?? []).map((asset) => (
+                    <option key={asset.mint} value={asset.mint}>
+                      {asset.symbol} · {asset.decimals} decimals · {asset.mint.slice(0, 5)}…{asset.mint.slice(-5)}
+                    </option>
+                  ))}
+                </select>
+                {payoutAssets.data?.length ? (
+                  <p className="text-xs text-muted-foreground">Rates and labels must be stated in this token; Vuze does not convert token amounts to USD.</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No payout tokens are configured. Add a token to SOLANA_PAYOUT_ASSETS before creating campaigns.</p>
+                )}
               </div>
               <Textarea placeholder="Summary" value={summary} onChange={(e) => setSummary(e.target.value)} />
               <Textarea placeholder="Brief" value={brief} onChange={(e) => setBrief(e.target.value)} />
               <Textarea placeholder="Requirements" value={requirements} onChange={(e) => setRequirements(e.target.value)} />
-              <Button type="submit">Publish</Button>
+              <Button type="submit" disabled={!selectedAsset}>Publish</Button>
             </form>
           </CardContent>
         </Card>
@@ -114,6 +142,7 @@ function AdminCampaigns() {
               <div>
                 <p className="text-xs text-muted-foreground">{c.brand}</p>
                 <p className="font-medium">{c.title}</p>
+                <p className="text-xs text-muted-foreground">Payout token: {c.payoutTokenSymbol}</p>
               </div>
               <div className="flex items-center gap-2">
                 <Badge>{c.type}</Badge>

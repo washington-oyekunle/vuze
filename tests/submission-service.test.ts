@@ -54,7 +54,7 @@ beforeEach(async () => {
     "truncate direct_payout_requests, payout_items, payout_batches, payouts, submission_reviews, submissions, analytics_proof_uploads, profiles restart identity cascade",
   );
   await sql`insert into profiles (user_id,display_name,role) values ('creator','Creator','creator'),('other','Other','creator'),('admin','Admin','admin')`;
-  await sql`update campaigns set status='live', deadline=now()+interval '1 day', max_submissions=null, min_views=1000 where id=1`;
+  await sql`update campaigns set status='live', deadline=now()+interval '1 day', max_submissions=null, min_views=1000, payout_kind='per_1k', payout_rate=4, payout_token_decimals=6 where id=1`;
   delete process.env.ANALYTICS_VERIFIER_URL;
   delete process.env.ANALYTICS_VERIFIER_TOKEN;
   process.env.YOUTUBE_DATA_API_KEY = "test-only";
@@ -101,6 +101,17 @@ test("claims upfront proof and admits exactly 1000 server-verified views to revi
     )[0].status,
     "claimed",
   );
+});
+test("payout estimates round to the campaign token's configured decimals", async () => {
+  for (const [kind, postId] of [
+    ["flat", "flatprecis1"],
+    ["per_1k", "rateprecis1"],
+  ] as const) {
+    await sql`update campaigns set payout_kind=${kind}, payout_rate=1.239, payout_token_decimals=2 where id=1`;
+    const result = await submit(postId);
+    const [row] = await sql<any>`select estimated_payout from submissions where id=${result.id}`;
+    assert.equal(Number(row.estimated_payout), 1.24);
+  }
 });
 test("below-minimum views auto-reject without creating a payable estimate", async () => {
   setViews(999);

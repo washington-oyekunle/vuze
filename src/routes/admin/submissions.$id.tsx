@@ -18,7 +18,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { SubmissionStatusBadge } from "@/components/status-badge";
-import { compactNumber, money } from "@/lib/utils";
+import { compactNumber, tokenAmount } from "@/lib/utils";
 export const Route = createFileRoute("/admin/submissions/$id")({
   component: AdminReview,
 });
@@ -200,7 +200,7 @@ function AdminReview() {
           <CardContent className="space-y-3">
             <p className="text-xs text-muted-foreground">Estimated</p>
             <p className="font-display text-2xl tabular-nums">
-              {money(s.estimatedPayout)}
+              {tokenAmount(s.estimatedPayout, s.payoutTokenSymbol, s.payoutTokenDecimals, s.payoutTokenMint)}
             </p>
             <Textarea
               placeholder="Reviewer notes"
@@ -255,7 +255,7 @@ function AdminReview() {
                 >
                   {s.status === "payment_processing"
                     ? "Check payment"
-                    : "Pay USD1"}
+                    : `Pay ${s.payoutTokenSymbol}`}
                 </Button>
               </div>
             ) : null}

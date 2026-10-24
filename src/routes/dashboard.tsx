@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SubmissionStatusBadge } from "@/components/status-badge";
-import { compactNumber, money } from "@/lib/utils";
+import { compactNumber, tokenTotalsLabel } from "@/lib/utils";
 
 export const Route = createFileRoute("/dashboard")({ component: DashboardPage });
 
@@ -44,7 +44,7 @@ function DashboardPage() {
           { label: "Open campaigns", value: stats ? String(stats.activeCampaigns) : "—" },
           { label: "In review", value: stats ? String(stats.pending) : "—" },
           { label: "Approved posts", value: stats ? String(stats.approved) : "—" },
-          { label: "Paid out", value: stats ? money(stats.earned) : "—" },
+          { label: "Paid out", value: stats ? tokenTotalsLabel(stats.earnedByAsset) : "—" },
         ].map((s) => (
           <Card key={s.label}>
             <CardContent>
@@ -68,7 +68,7 @@ function DashboardPage() {
                 <p className="text-xs text-muted-foreground">{c.brand}</p>
                 <h3 className="font-medium">{c.title}</h3>
               </div>
-              <p className="text-sm text-muted-foreground">{c.payoutLabel}</p>
+              <p className="text-sm text-muted-foreground">{c.payoutLabel} · {c.payoutTokenSymbol}</p>
               <Button asChild variant="outline" size="sm">
                 <Link to="/campaigns/$id" params={{ id: String(c.id) }}>
                   Open brief

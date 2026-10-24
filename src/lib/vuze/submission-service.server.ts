@@ -169,8 +169,8 @@ export async function completeVerification(
       verification_reason = case when ${metrics.views} >= s.min_views then 'Minimum verified views reached; awaiting visual proof review.'
         else 'Minimum threshold not reached yet. Retry after the post reaches the minimum.' end,
       estimated_payout = case when ${metrics.views} < s.min_views then 0
-        when c.payout_kind = 'flat' then c.payout_rate
-        when c.payout_kind = 'per_1k' then round(c.payout_rate * ${metrics.views}::numeric / 1000, 6) else 0 end
+        when c.payout_kind = 'flat' then round(c.payout_rate::numeric, c.payout_token_decimals)
+        when c.payout_kind = 'per_1k' then round(c.payout_rate * ${metrics.views}::numeric / 1000, c.payout_token_decimals) else 0 end
       from campaigns c where s.campaign_id = c.id and s.id = ${id}
         and s.status = 'verifying' and s.verification_attempt_id = ${attemptId}`;
   }

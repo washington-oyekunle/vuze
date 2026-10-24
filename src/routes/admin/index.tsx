@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getAdminOverview, getMyProfile } from "@/lib/vuze/server";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { money } from "@/lib/utils";
+import { tokenTotalsLabel } from "@/lib/utils";
 
 export const Route = createFileRoute("/admin/")({ component: AdminHome });
 
@@ -37,7 +37,7 @@ function AdminHome() {
         {[
           { label: "Pending review", value: o ? String(o.pendingReview) : "—" },
           { label: "Live campaigns", value: o ? String(o.liveCampaigns) : "—" },
-          { label: "Paid this month", value: o ? money(o.paidThisMonth) : "—" },
+          { label: "Paid this month", value: o ? tokenTotalsLabel(o.paidThisMonthByAsset) : "—" },
           { label: "Flagged", value: o ? String(o.flagged) : "—" },
         ].map((s) => (
           <Card key={s.label}>
