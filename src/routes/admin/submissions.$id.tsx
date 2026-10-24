@@ -51,7 +51,7 @@ function AdminReview() {
   const [busy, setBusy] = useState(false);
   const s = q.data!;
   useEffect(() => {
-    if (s?.status !== "payment_processing" || !readiness.data?.enabled) return;
+    if (s?.status !== "payment_processing") return;
     let stopped = false;
     let running = false;
     async function reconcile() {
@@ -61,7 +61,7 @@ function AdminReview() {
         await adminReconcilePayment({ data: { submissionId: Number(id) } });
         if (!stopped) await q.refetch();
       } catch {
-        /* Keep the durable pending state; never issue a new payment. */
+        /* Keep the durable request; retries cannot change its key or payload. */
       } finally {
         running = false;
       }
@@ -72,7 +72,7 @@ function AdminReview() {
       stopped = true;
       clearInterval(timer);
     };
-  }, [s?.status, readiness.data?.enabled, id]);
+  }, [s?.status, id]);
   if (isPending)
     return (
       <AppShell>
@@ -95,7 +95,7 @@ function AdminReview() {
   async function act(action: "approve" | "reject" | "needs_proof") {
     setBusy(true);
     try {
-      await adminReviewSubmission({
+      const result = await adminReviewSubmission({
         data: {
           id: s.id,
           action,
@@ -104,7 +104,12 @@ function AdminReview() {
           notes,
         },
       });
-      toast.success("Updated");
+      if (action === "approve") {
+        const payout = "payout" in result ? result.payout : undefined;
+        if (payout?.status === "paid") toast.success("Approved and paid");
+        else if (payout?.message) toast.warning(`Approved; ${payout.message}`);
+        else toast.success("Approved; payout processing");
+      } else toast.success("Updated");
       await q.refetch();
       await reviews.refetch();
     } catch (e) {
@@ -132,7 +137,8 @@ function AdminReview() {
     ["under_review", "needs_proof"].includes(s.status) &&
     s.verificationStatus === "verified" &&
     s.views >= s.minViews &&
-    !!s.analyticsProofUrl;
+    !!s.analyticsProofUrl &&
+    !!s.payoutWalletAddress;
   const proof = s.analyticsProofUrl;
   return (
     <AppShell>
@@ -207,6 +213,15 @@ function AdminReview() {
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
             />
+            <div className="rounded-lg bg-secondary p-3 text-xs">
+              <p className="font-medium">Payout wallet for this video</p>
+              <p className="mt-1 break-all font-mono">
+                {s.payoutWalletAddress ?? "No wallet saved; approval is disabled"}
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                Captured with this submission and locked for this video.
+              </p>
+            </div>
             <select
               className="h-11 w-full rounded-lg border border-border bg-secondary px-3 text-sm"
               value={reason}
@@ -220,11 +235,16 @@ function AdminReview() {
             </select>
             <Button
               className="w-full"
-              disabled={!eligible || s.flagged || busy}
+              disabled={!eligible || s.flagged || busy || !readiness.data?.enabled}
               onClick={() => void act("approve")}
             >
-              Approve
+              Approve &amp; initiate payout
             </Button>
+            {!readiness.data?.enabled ? (
+              <p className="text-xs text-muted-foreground">
+                Approval is disabled because automatic payout is not ready: {readiness.data?.reason || "Checking signer readiness…"}
+              </p>
+            ) : null}
             <Button
               className="w-full"
               variant="outline"

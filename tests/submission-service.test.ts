@@ -76,12 +76,17 @@ async function proof(owner = "creator") {
   await sql`insert into analytics_proof_uploads (id,user_id,pathname,content_type,size_bytes,status) values (${id},${owner},${"analytics/" + owner + "/" + id + "/proof.png"},'image/png',100,'ready')`;
   return id;
 }
-async function submit(id = "abcdefghijk", upload?: string) {
+async function submit(
+  id = "abcdefghijk",
+  upload?: string,
+  payoutWalletAddress = "11111111111111111111111111111112",
+) {
   upload ??= await proof();
   return createSubmission(sql, "creator", {
     campaignId: 1,
     postUrl: `https://youtu.be/${id}`,
     platform: "youtube",
+    payoutWalletAddress,
     proofUploadId: upload,
   });
 }
@@ -100,6 +105,29 @@ test("claims upfront proof and admits exactly 1000 server-verified views to revi
       await sql<any>`select status from analytics_proof_uploads where id=${upload}`
     )[0].status,
     "claimed",
+  );
+});
+test("every video has its own wallet, which the database locks after submission", async () => {
+  const first = await submit("wallettest1", undefined, "11111111111111111111111111111112");
+  const second = await submit("walletnext1", undefined, "11111111111111111111111111111113");
+  const rows = await sql<any>`select payout_wallet_address from submissions order by id`;
+  assert.deepEqual(rows.map((row) => row.payout_wallet_address), [
+    "11111111111111111111111111111112",
+    "11111111111111111111111111111113",
+  ]);
+  await assert.rejects(
+    sql`update submissions set payout_wallet_address='11111111111111111111111111111114' where id=${first.id}`,
+    /payout wallet is immutable/,
+  );
+  assert.equal(
+    (await sql<any>`select payout_wallet_address from submissions where id=${second.id}`)[0].payout_wallet_address,
+    "11111111111111111111111111111113",
+  );
+});
+test("the database rejects a new submission without a payout wallet", async () => {
+  await assert.rejects(
+    sql`insert into submissions (campaign_id,user_id,post_url,platform,video_id,status,estimated_payout) values (1,'creator','https://youtu.be/abcdefghijk','youtube','abcdefghijk','verifying',0)`,
+    /payout wallet is required/,
   );
 });
 test("payout estimates round to the campaign token's configured decimals", async () => {
@@ -167,6 +195,7 @@ test("same canonical request is idempotent and does not call API again", async (
     campaignId: 1,
     postUrl: "https://youtube.com/shorts/abcdefghijk?feature=share",
     platform: "youtube",
+    payoutWalletAddress: "11111111111111111111111111111112",
     proofUploadId: upload,
   });
   assert.deepEqual(again, first);
@@ -176,7 +205,8 @@ test("same canonical request is idempotent and does not call API again", async (
   );
 });
 test("same video with different proof rejects, without consuming the new upload", async () => {
-  await submit();
+  const existing = await submit();
+  await sql`update submissions set status='paid' where id=${existing.id}`;
   const upload = await proof();
   await assert.rejects(submit("abcdefghijk", upload), /already been submitted/);
   assert.equal(

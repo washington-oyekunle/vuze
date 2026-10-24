@@ -12,8 +12,13 @@ export type SolanaPayoutAsset = {
   decimals: number;
   network: typeof SOLANA_MAINNET;
   treasuryWallet: string;
+  maxPayoutUnits: string;
+  maxDailyPayoutUnits: string;
 };
-export type SolanaPayoutAssetOption = Omit<SolanaPayoutAsset, "treasuryWallet">;
+export type SolanaPayoutAssetOption = Omit<
+  SolanaPayoutAsset,
+  "treasuryWallet" | "maxPayoutUnits" | "maxDailyPayoutUnits"
+>;
 type RequestRow = {
   id: number | string;
   submission_id: number | string;
@@ -27,6 +32,7 @@ type RequestRow = {
   treasury_wallet: string;
   transaction_signature: string | null;
   status: string;
+  failure_reason: string;
 };
 function env(name: string): string | undefined {
   const value = typeof process !== "undefined" ? process.env[name] : undefined;
@@ -68,6 +74,9 @@ function validWallet(value: string): boolean {
   const bytes = base58Bytes(value);
   return !!bytes && bytes.length === 32;
 }
+export function isValidSolanaAddress(value: string): boolean {
+  return validWallet(value);
+}
 function validSignature(value: unknown): value is string {
   const bytes = typeof value === "string" ? base58Bytes(value) : null;
   return !!bytes && bytes.length === 64;
@@ -105,6 +114,12 @@ function parseConfiguredAssets(): {
     const decimals = row.decimals;
     const treasuryWallet =
       typeof row.treasuryWallet === "string" ? row.treasuryWallet.trim() : "";
+    const maxPayoutUnits =
+      typeof row.maxPayoutUnits === "string" ? row.maxPayoutUnits.trim() : "";
+    const maxDailyPayoutUnits =
+      typeof row.maxDailyPayoutUnits === "string"
+        ? row.maxDailyPayoutUnits.trim()
+        : "";
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,15}$/.test(symbol))
       return {
         assets: [],
@@ -119,6 +134,16 @@ function parseConfiguredAssets(): {
         assets: [],
         reason: `The configured ${symbol} treasury is not a valid Solana public key.`,
       };
+    if (!/^\d+$/.test(maxPayoutUnits) || BigInt(maxPayoutUnits) <= 0n)
+      return {
+        assets: [],
+        reason: `The configured ${symbol} maxPayoutUnits must be a positive integer string.`,
+      };
+    if (!/^\d+$/.test(maxDailyPayoutUnits) || BigInt(maxDailyPayoutUnits) <= 0n)
+      return {
+        assets: [],
+        reason: `The configured ${symbol} maxDailyPayoutUnits must be a positive integer string.`,
+      };
     if (mints.has(mint))
       return { assets: [], reason: "SOLANA_PAYOUT_ASSETS cannot contain a mint more than once." };
     mints.add(mint);
@@ -128,6 +153,8 @@ function parseConfiguredAssets(): {
       decimals: decimals as number,
       network: SOLANA_MAINNET,
       treasuryWallet,
+      maxPayoutUnits,
+      maxDailyPayoutUnits,
     });
   }
   return { assets };
@@ -221,13 +248,21 @@ async function requestJson(
     clearTimeout(timer);
   }
 }
+function safeSignerCode(value: unknown, status: number): string {
+  return typeof value === "string" && /^[A-Z0-9_]{1,64}$/.test(value)
+    ? value
+    : `SIGNER_HTTP_${status}`;
+}
 async function signerRequest(
   method: "GET" | "POST",
   key: string,
   payload?: object,
 ) {
-  const base = env("SOLANA_SIGNER_URL")!.replace(/\/+$/, "");
-  const token = env("SOLANA_SIGNER_TOKEN")!;
+  const configuredBase = env("SOLANA_SIGNER_URL");
+  const token = env("SOLANA_SIGNER_TOKEN");
+  if (!configuredBase || !token)
+    return { ok: false, status: 0, body: null };
+  const base = configuredBase.replace(/\/+$/, "");
   const headers: Record<string, string> = {
     authorization: `Bearer ${token}`,
     accept: "application/json",
@@ -246,20 +281,6 @@ async function rpc(method: string, params: unknown[]): Promise<any> {
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
   });
   return result.ok && !result.body?.error ? result.body?.result : null;
-}
-async function verifiedMintOnMainnet(asset: SolanaPayoutAsset): Promise<boolean> {
-  if ((await rpc("getGenesisHash", [])) !== MAINNET_GENESIS) return false;
-  const account = await rpc("getAccountInfo", [
-    asset.mint,
-    { encoding: "jsonParsed", commitment: "finalized" },
-  ]);
-  const value = account?.value;
-  return (
-    !!value &&
-    (value.owner === TOKEN_PROGRAM || value.owner === TOKEN_2022_PROGRAM) &&
-    value.data?.parsed?.type === "mint" &&
-    value.data?.parsed?.info?.decimals === asset.decimals
-  );
 }
 function decimal(value: unknown): bigint | null {
   try {
@@ -405,7 +426,7 @@ async function verifyFinalized(
   for (const inner of tx.meta?.innerInstructions ?? []) walk(inner.instructions);
   return exactTransfer;
 }
-const rowSelect = `id, submission_id, idempotency_key, creator_wallet, trunc(amount_units)::text as amount_units, token_symbol, token_mint, token_decimals, network, treasury_wallet, transaction_signature, status`;
+const rowSelect = `id, submission_id, idempotency_key, creator_wallet, trunc(amount_units)::text as amount_units, token_symbol, token_mint, token_decimals, network, treasury_wallet, transaction_signature, status, failure_reason`;
 async function closeIfVerified(
   sql: Sql,
   row: RequestRow,
@@ -425,7 +446,7 @@ async function closeIfVerified(
     return {
       status: "processing",
       message:
-        "Transfer is not finalized or did not match the immutable payout snapshot; manual reconciliation is required.",
+        "Transfer is not finalized yet or did not match the immutable payout snapshot; Vuze will keep checking this existing request.",
     };
   const reused = await sql.query(
     `select 1 from payouts where reference=$1 limit 1`,
@@ -466,7 +487,7 @@ async function closeIfVerified(
     return {
       status: "processing",
       message:
-        "Finalized transfer could not be closed atomically; manual reconciliation is required.",
+        "Finalized transfer could not be closed atomically; Vuze will retry reconciliation of the existing request.",
     };
   }
   return { status: "paid" };
@@ -475,9 +496,11 @@ export async function paySubmission(
   sql: Sql,
   submissionId: number,
   adminId: string,
+  reconcileOnly = false,
 ): Promise<PayoutResult> {
   const ready = getPayoutReadiness();
-  if (!ready.enabled) return { status: "processing", message: ready.reason };
+  if (!reconcileOnly && !ready.enabled)
+    return { status: "processing", message: ready.reason };
   if (
     !Number.isSafeInteger(submissionId) ||
     submissionId <= 0 ||
@@ -491,6 +514,11 @@ export async function paySubmission(
       [submissionId],
     )
   )[0];
+  if (!row && reconcileOnly)
+    return {
+      status: "processing",
+      message: "No existing payout request is available to reconcile.",
+    };
   if (!row) {
     const campaignAsset = (
       await sql.query<{
@@ -518,25 +546,18 @@ export async function paySubmission(
         message:
           "The campaign payout token is not in the configured Solana-token allowlist; no transfer was created.",
       };
-    if (!(await verifiedMintOnMainnet(asset)))
-      return {
-        status: "processing",
-        message:
-          "The configured token mint or decimals could not be verified on Solana mainnet; no transfer was created.",
-      };
     row = await sql.transaction(async (tx) => {
       const locked = await tx.query<{
         id: number;
         user_id: string;
         payout_wallet_address: string;
-        payout_wallet_status: string;
         suspended: boolean;
         payout_token_symbol: string;
         payout_token_mint: string;
         payout_token_decimals: number | string;
         payout_network: string;
       }>(
-        `select p.user_id, p.payout_wallet_address, p.payout_wallet_status, p.suspended,
+        `select p.user_id, s.payout_wallet_address, p.suspended,
                 c.payout_token_symbol, c.payout_token_mint, c.payout_token_decimals, c.payout_network
          from submissions s join profiles p on p.user_id=s.user_id
          join campaigns c on c.id=s.campaign_id
@@ -554,7 +575,7 @@ export async function paySubmission(
         return undefined;
       const claimed = await tx.query<RequestRow>(
         `with eligible as (
-           select s.id, p.payout_wallet_address as wallet,
+           select s.id, s.payout_wallet_address as wallet,
                   round(s.estimated_payout::numeric * power(10::numeric, $8::int)) as units
            from submissions s
            join profiles p on p.user_id=s.user_id
@@ -562,8 +583,8 @@ export async function paySubmission(
            where s.id=$1 and s.status='approved' and s.payout_proof_status='accepted'
              and s.verification_status='verified' and s.flagged=false and s.views >= s.min_views
              and nullif(trim(s.analytics_proof_url),'') is not null
-             and p.payout_wallet_status='verified' and p.suspended=false
-             and nullif(trim(p.payout_wallet_address),'') is not null
+             and p.suspended=false
+             and nullif(trim(s.payout_wallet_address),'') is not null
              and s.estimated_payout > 0
              and c.payout_token_symbol=$7 and c.payout_token_mint=$2
              and c.payout_token_decimals=$8 and c.payout_network=$3
@@ -617,7 +638,7 @@ export async function paySubmission(
     !/^[A-Za-z0-9][A-Za-z0-9._-]{0,15}$/.test(row.token_symbol)
   ) {
     await sql.query(
-      `update direct_payout_requests set status='blocked', updated_at=now() where id=$1 and status='processing'`,
+      `update direct_payout_requests set status='blocked', failure_reason='INVALID_IMMUTABLE_SNAPSHOT', updated_at=now() where id=$1 and status='processing'`,
       [row.id],
     );
     return {
@@ -626,21 +647,62 @@ export async function paySubmission(
         "Payout is blocked because the immutable wallet or asset snapshot is invalid.",
     };
   }
+  const payoutAsset = reconcileOnly
+    ? undefined
+    : configuredAssetMatches(
+        row.token_symbol,
+        row.token_mint,
+        row.token_decimals,
+        row.network,
+      );
+  const requestedUnits = decimal(row.amount_units);
+  if (
+    requestedUnits === null ||
+    (!reconcileOnly &&
+      (!payoutAsset ||
+        payoutAsset.treasuryWallet !== row.treasury_wallet ||
+        requestedUnits > BigInt(payoutAsset.maxPayoutUnits)))
+  ) {
+    await sql.query(
+      `update direct_payout_requests set status='blocked', failure_reason='ASSET_OR_PAYOUT_CAP', updated_at=now() where id=$1 and status='processing'`,
+      [row.id],
+    );
+    return {
+      status: "processing",
+      message:
+        reconcileOnly
+          ? "Payout is blocked because its immutable amount is invalid."
+          : "Payout is blocked because its token, treasury, or amount exceeds the current signer allowlist.",
+    };
+  }
   if (row.status === "blocked")
     return {
       status: "processing",
-      message: "Payout is blocked and requires manual review.",
+      message: `Payout is blocked (${row.failure_reason || "manual review required"}); no transfer was made.`,
     };
   if (row.status === "confirmed" && row.transaction_signature)
     return { status: "paid" };
   let signature = row.transaction_signature;
   if (!signature) {
+    let signerRequestMissing = false;
     const reconciled = await signerRequest("GET", row.idempotency_key);
+    signerRequestMissing = !reconciled.ok && reconciled.status === 404;
+    if (!reconciled.ok && [409, 422].includes(reconciled.status)) {
+      const code = safeSignerCode(reconciled.body?.code, reconciled.status);
+      await sql.query(
+        `update direct_payout_requests set status='blocked',failure_reason=$2,updated_at=now() where id=$1 and status='processing'`,
+        [row.id, code],
+      );
+      return {
+        status: "processing",
+        message: `Signer blocked this payout (${code}); no transfer was made.`,
+      };
+    }
     signature =
       reconciled.ok && validSignature(reconciled.body?.signature)
         ? reconciled.body.signature
         : null;
-    if (!signature && newlyClaimed) {
+    if (!signature && (newlyClaimed || signerRequestMissing)) {
       const sent = await signerRequest("POST", row.idempotency_key, {
         idempotencyKey: row.idempotency_key,
         destination: row.creator_wallet,
@@ -649,6 +711,17 @@ export async function paySubmission(
         amountUnits: row.amount_units,
         network: row.network,
       });
+      if (!sent.ok && [409, 422].includes(sent.status)) {
+        const code = safeSignerCode(sent.body?.code, sent.status);
+        await sql.query(
+          `update direct_payout_requests set status='blocked',failure_reason=$2,updated_at=now() where id=$1 and status='processing'`,
+          [row.id, code],
+        );
+        return {
+          status: "processing",
+          message: `Signer blocked this payout (${code}); no transfer was made.`,
+        };
+      }
       signature =
         sent.ok && validSignature(sent.body?.signature)
           ? sent.body.signature
@@ -658,7 +731,7 @@ export async function paySubmission(
       return {
         status: "processing",
         message:
-          "Signer has no known signature; no new transfer will be created. Manual reconciliation is required.",
+          "Signer is still processing this payout; Vuze will keep reconciling the existing request automatically. No new transfer will be created.",
       };
     const cas = await sql.query<RequestRow>(
       `update direct_payout_requests set transaction_signature=$2, updated_at=now()

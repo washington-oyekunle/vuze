@@ -80,6 +80,9 @@ function mapSubmission(r: Record<string, unknown>): Submission {
     creatorName: String(r.creator_name ?? ""),
     postUrl: String(r.post_url),
     platform: String(r.platform),
+    payoutWalletAddress: r.payout_wallet_address
+      ? String(r.payout_wallet_address)
+      : null,
     notes: String(r.notes ?? ""),
     analyticsUrls: String(r.analytics_urls ?? ""),
     analyticsProofUrl: String(r.analytics_proof_url ?? ""),
@@ -452,6 +455,10 @@ const submitSchema = z.object({
   campaignId: z.number().int().positive(),
   postUrl: z.string().url(),
   platform: z.enum(["youtube", "tiktok", "instagram"]),
+  payoutWalletAddress: z
+    .string()
+    .trim()
+    .regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "Enter a valid Solana wallet address"),
   notes: z.string().max(800).optional(),
   proofUploadId: z.string().uuid(),
 });
@@ -487,6 +494,12 @@ export const getMySubmission = createServerFn({ method: "GET" })
   .validator(z.object({ id: z.number() }))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
+    const owned = await sql.query<{ status: string }>(
+      `select status from submissions where id=$1 and user_id=$2`,
+      [data.id, context.userId],
+    );
+    if (owned[0]?.status === "payment_processing")
+      await paySubmission(sql, data.id, context.userId, true);
     const rows = await sql.query<Record<string, unknown>>(
       `select s.*, c.title as campaign_title, c.brand as campaign_brand,
               c.payout_token_symbol, c.payout_token_mint, c.payout_token_decimals, c.payout_network,
@@ -793,8 +806,16 @@ export const adminReviewSubmission = createServerFn({ method: "POST" })
   )
   .handler(async ({ context, data }) => {
     await requireAdmin(context.userId);
+    if (data.action === "approve") {
+      const readiness = getPayoutReadiness();
+      if (!readiness.enabled)
+        throw new Error(`Automatic payout is unavailable: ${readiness.reason}`);
+    }
     const sql = await getSql();
-    return reviewSubmission(sql, context.userId, data);
+    const review = await reviewSubmission(sql, context.userId, data);
+    if (data.action !== "approve") return review;
+    const payout = await paySubmission(sql, data.id, context.userId);
+    return { ...review, payout };
   });
 
 export const adminGetPayoutReadiness = createServerFn({ method: "GET" })
@@ -812,7 +833,7 @@ export const adminPaySubmission = createServerFn({ method: "POST" })
     return paySubmission(await getSql(), data.submissionId, context.userId);
   });
 
-/** Poll only existing payment requests; this endpoint can never create one. */
+/** Reconcile an existing app request; retries keep its original key and payload. */
 export const adminReconcilePayment = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(z.object({ submissionId: z.number().int().positive() }))
@@ -823,7 +844,7 @@ export const adminReconcilePayment = createServerFn({ method: "POST" })
       await sql`select id from direct_payout_requests where submission_id = ${data.submissionId}`;
     if (!existing[0])
       throw new Error("No existing payment request to reconcile");
-    return paySubmission(sql, data.submissionId, context.userId);
+    return paySubmission(sql, data.submissionId, context.userId, true);
   });
 
 export const adminReviewPayoutProof = createServerFn({ method: "POST" })

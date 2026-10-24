@@ -35,6 +35,7 @@ function SubmitPage() {
   const live = (camps.data ?? []).filter((c) => c.status === "live");
   const [campaignId, setCampaignId] = useState(campaign ?? 0);
   const [postUrl, setPostUrl] = useState("");
+  const [payoutWalletAddress, setPayoutWalletAddress] = useState("");
   const [platform, setPlatform] = useState<"tiktok" | "instagram" | "youtube">(
     "tiktok",
   );
@@ -60,6 +61,7 @@ function SubmitPage() {
           campaignId: id,
           postUrl,
           platform,
+          payoutWalletAddress,
           notes: notes || undefined,
           proofUploadId: proof.id,
         },
@@ -145,6 +147,26 @@ function SubmitPage() {
                   </select>
                 </div>
               </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="payout-wallet">Solana wallet for this video</Label>
+              <Input
+                id="payout-wallet"
+                required
+                minLength={32}
+                maxLength={44}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                pattern="[1-9A-HJ-NP-Za-km-z]{32,44}"
+                value={payoutWalletAddress}
+                onChange={(e) => setPayoutWalletAddress(e.target.value.trim())}
+                placeholder="Paste a Solana wallet address"
+              />
+              <p className="text-xs text-muted-foreground">
+                This address is saved with this video. You can use a different
+                wallet for another video; it cannot be changed after submission.
+              </p>
             </div>
             <div>
               <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">

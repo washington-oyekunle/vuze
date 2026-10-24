@@ -141,6 +141,15 @@ function SubmissionDetail() {
               · minimum {compactNumber(s.minViews)} required
             </p>
             {s.notes ? <p>{s.notes}</p> : null}
+            <div className="rounded-lg bg-secondary p-3">
+              <p className="font-medium">Payout wallet for this video</p>
+              <p className="mt-1 break-all font-mono text-xs">
+                {s.payoutWalletAddress}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Captured with this submission and locked to this video.
+              </p>
+            </div>
             {s.adminNotes ? (
               <p className="rounded-lg bg-secondary p-3 text-muted-foreground">
                 Reviewer: {s.adminNotes}

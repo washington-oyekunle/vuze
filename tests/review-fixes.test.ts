@@ -89,6 +89,7 @@ async function submit(campaignId = 1, videoId = "abcdefghijk", proofUploadId?: s
     campaignId,
     postUrl: `https://youtu.be/${videoId}`,
     platform: "youtube",
+    payoutWalletAddress: "11111111111111111111111111111112",
     proofUploadId,
   });
 }
@@ -146,6 +147,7 @@ test("same video and proof cannot masquerade as idempotent success in another ca
       campaignId: 2,
       postUrl: "https://youtube.com/shorts/abcdefghijk?feature=share",
       platform: "youtube",
+      payoutWalletAddress: "11111111111111111111111111111112",
       proofUploadId: upload,
     }),
     /already been submitted/,

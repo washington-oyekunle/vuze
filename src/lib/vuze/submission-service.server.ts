@@ -1,4 +1,5 @@
 import type { Sql } from "../db";
+import { isValidSolanaAddress } from "./payout-service.server.ts";
 import {
   eligibility,
   parseVideoUrl,
@@ -10,6 +11,7 @@ type SubmitInput = {
   campaignId: number;
   postUrl: string;
   platform: string;
+  payoutWalletAddress: string;
   notes?: string;
   proofUploadId: string;
 };
@@ -26,6 +28,7 @@ type Entry = {
   min_views: number;
   views: number;
   flagged: boolean;
+  payout_wallet_address: string | null;
 };
 type VerificationSnapshot = {
   status: string;
@@ -79,6 +82,8 @@ export async function createSubmission(
   userId: string,
   data: SubmitInput,
 ) {
+  if (!isValidSolanaAddress(data.payoutWalletAddress.trim()))
+    throw new Error("Enter a valid Solana wallet address for this video");
   const identity = parseVideoUrl(data.postUrl, data.platform);
   const attemptId = crypto.randomUUID();
   const { id, created } = await sql.transaction(async (tx) => {
@@ -135,10 +140,10 @@ export async function createSubmission(
       throw new Error("Too many submissions. Try again later.");
     const proof = await attachProof(tx, data.proofUploadId, userId);
     const inserted = await tx<{ id: number }>`
-      insert into submissions (campaign_id, user_id, post_url, platform, video_id, notes,
+      insert into submissions (campaign_id, user_id, post_url, platform, video_id, payout_wallet_address, notes,
         proof_upload_id, analytics_proof_url, analytics_proof_type, min_views,
         views, estimated_payout, status, verification_status, verification_started_at, verification_attempt_id)
-      values (${data.campaignId}, ${userId}, ${identity.canonicalUrl}, ${identity.platform}, ${identity.videoId}, ${data.notes?.trim() ?? ""},
+      values (${data.campaignId}, ${userId}, ${identity.canonicalUrl}, ${identity.platform}, ${identity.videoId}, ${data.payoutWalletAddress.trim()}, ${data.notes?.trim() ?? ""},
         ${data.proofUploadId}, ${proof.url}, ${proof.contentType}, ${campaign.min_views},
         0, 0, 'verifying', 'pending', now(), ${attemptId}) returning id
     `;
@@ -276,6 +281,13 @@ export async function reviewSubmission(
     }
     if (data.action === "approve" && entry.flagged)
       throw new Error("Flagged entries must be resolved before approval");
+    if (
+      data.action === "approve" &&
+      !isValidSolanaAddress(entry.payout_wallet_address ?? "")
+    )
+      throw new Error(
+        "A valid payout wallet for this video is required before approval",
+      );
     const reason = data.reason?.trim() || "Visual analytics proof accepted";
     await tx`insert into submission_reviews (submission_id, reviewer_id, action, reason, notes)
       values (${data.id}, ${adminId}, ${data.action}, ${reason}, ${data.notes?.trim() ?? ""})`;

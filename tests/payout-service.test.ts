@@ -27,8 +27,8 @@ function configure() {
     SOLANA_PAYOUT_NAMESPACE: "test-deployment",
     SOLANA_RPC_URL: "https://rpc.test",
     SOLANA_PAYOUT_ASSETS: JSON.stringify([
-      { symbol: "USD1", mint: USD1_MINT, decimals: 6, treasuryWallet: TREASURY },
-      { symbol: "ALT", mint: ALT_MINT, decimals: 9, treasuryWallet: ALT_TREASURY },
+      { symbol: "USD1", mint: USD1_MINT, decimals: 6, treasuryWallet: TREASURY, maxPayoutUnits: "1000000000000", maxDailyPayoutUnits: "10000000000000" },
+      { symbol: "ALT", mint: ALT_MINT, decimals: 9, treasuryWallet: ALT_TREASURY, maxPayoutUnits: "1000000000000", maxDailyPayoutUnits: "10000000000000" },
     ]),
   });
 }
@@ -48,7 +48,8 @@ async function database() {
     [RECIPIENT],
   );
   await pg.query(
-    "insert into submissions(campaign_id,user_id,post_url,status,estimated_payout,payout_proof_status,verification_status,views,min_views,analytics_proof_url,flagged) values (1,'creator','https://x','approved',1.000000,'accepted','verified',1000,1000,'proof',false)",
+    "insert into submissions(campaign_id,user_id,post_url,payout_wallet_address,status,estimated_payout,payout_proof_status,verification_status,views,min_views,analytics_proof_url,flagged) values (1,'creator','https://x',$1,'approved',1.000000,'accepted','verified',1000,1000,'proof',false)",
+    [RECIPIENT],
   );
   const sql: any = {
     query: async (text: string, params?: unknown[]) =>
@@ -424,19 +425,22 @@ test("signatures in unsuccessful signer responses are never trusted", async () =
   }
 });
 
-test("unfinalized transfers remain open and later reconcile the immutable wallet snapshot", async () => {
+test("a 202 signer response later reconciles the immutable wallet snapshot without another POST", async () => {
   configure();
   const { pg, sql } = await database();
   let finalized = false;
+  let signerReady = false;
   let posts = 0;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input, init) => {
     if (String(input).startsWith("https://signer.test")) {
       if (init?.method === "POST") {
         posts++;
-        return Response.json({ signature: SIGNATURE });
+        return Response.json({ status: "processing" }, { status: 202 });
       }
-      return Response.json({});
+      return signerReady
+        ? Response.json({ signature: SIGNATURE })
+        : Response.json({ status: "processing" }, { status: 202 });
     }
     const body = JSON.parse(String(init?.body));
     return Response.json({
@@ -452,12 +456,10 @@ test("unfinalized transfers remain open and later reconcile the immutable wallet
       "update profiles set payout_wallet_address=$1, payout_wallet_status='pending' where user_id='creator'",
       [DESTINATION],
     );
-    process.env.SOLANA_PAYOUT_ASSETS = JSON.stringify([
-      { symbol: "USD1", mint: USD1_MINT, decimals: 6, treasuryWallet: SOURCE },
-      { symbol: "ALT", mint: ALT_MINT, decimals: 9, treasuryWallet: ALT_TREASURY },
-    ]);
     finalized = true;
-    assert.equal((await paySubmission(sql, 1, "admin")).status, "paid");
+    signerReady = true;
+    process.env.SOLANA_PAYOUTS_ENABLED = "false";
+    assert.equal((await paySubmission(sql, 1, "admin", true)).status, "paid");
     assert.equal(posts, 1);
     assert.equal(
       (await sql.query("select reference from payouts"))[0].reference,
@@ -467,6 +469,55 @@ test("unfinalized transfers remain open and later reconcile the immutable wallet
       (await sql.query("select creator_wallet from direct_payout_requests"))[0]
         .creator_wallet,
       RECIPIENT,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    resetEnv();
+    await pg.close();
+  }
+});
+
+test("retries the same immutable request after a signer outage and explicit 404", async () => {
+  configure();
+  const { pg, sql } = await database();
+  let signerStored = false;
+  let posts = 0;
+  const postedPayloads: unknown[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).startsWith("https://signer.test")) {
+      if (init?.method !== "POST")
+        return signerStored
+          ? Response.json({ signature: SIGNATURE })
+          : Response.json({ code: "REQUEST_NOT_FOUND" }, { status: 404 });
+      posts++;
+      postedPayloads.push(JSON.parse(String(init.body)));
+      if (posts === 1)
+        return Response.json({ code: "UPSTREAM_UNAVAILABLE" }, { status: 503 });
+      signerStored = true;
+      return Response.json({ signature: SIGNATURE });
+    }
+    const body = JSON.parse(String(init?.body));
+    return Response.json({
+      result: body.method === "getTransaction" ? rpcTx() : rpcResult(body),
+    });
+  }) as typeof fetch;
+  try {
+    assert.equal((await paySubmission(sql, 1, "admin")).status, "processing");
+    assert.equal(
+      (await sql.query("select status from submissions where id=1"))[0].status,
+      "payment_processing",
+    );
+    assert.equal(posts, 1);
+
+    process.env.SOLANA_PAYOUTS_ENABLED = "false";
+    assert.equal((await paySubmission(sql, 1, "admin", true)).status, "paid");
+    assert.equal(posts, 2);
+    assert.deepEqual(postedPayloads[0], postedPayloads[1]);
+    assert.equal(
+      (await sql.query("select status from direct_payout_requests where submission_id=1"))[0]
+        .status,
+      "confirmed",
     );
   } finally {
     globalThis.fetch = originalFetch;

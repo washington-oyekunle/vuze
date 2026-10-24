@@ -1,19 +1,19 @@
 # VUZE
 
-A creator desk for organic UGC and clipping campaigns, built with TanStack Start, React, and Postgres. The new workflow targets **Supabase Postgres + private Supabase Storage**. Existing Better Auth sign-in remains in place; this is not a Supabase Auth migration.
+Vuze is a creator desk for organic UGC and clipping campaigns, built with TanStack Start, React, and Postgres. The production workflow targets Supabase Postgres plus private Supabase Storage. Existing Better Auth sign-in remains in place; this is not a Supabase Auth migration.
 
-## The four-step flow
+## Creator review and payout flow
 
-1. **Creator:** submit a public video URL and an analytics screenshot or recording together. PNG, JPEG, WebP, MP4, and WebM are supported, up to 25 MiB. Files upload directly into private Storage; the web server never receives a large multipart body.
-2. **Automatic verification:** the server retrieves the view count. At or above the campaign minimum (default 1,000), the entry enters review; below the minimum, it shows “Minimum threshold not reached yet,” stays out of review, and can be rechecked on the same entry after views grow. Missing permission, unavailable metrics, timeouts, and exhausted API quotas produce a recoverable verification hold, **not a zero-view rejection**.
-3. **Admin console:** the queue refreshes every five seconds. Admins visually review the uploaded proof and approve or decline with an audited reason. This is polling, not a WebSocket/Realtime subscription. View counts do not establish ownership, audience quality, or organic traffic; proof review still matters.
-4. **Pay:** an admin requests one payment in the Solana token selected for that campaign through a separately operated secure signer. A durable request snapshots the recipient, amount, token mint, decimals, network, and treasury. Repeated clicks reconcile that request; ambiguous requests never create a new transfer. The entry closes only after the server verifies a finalized Solana mainnet transaction against the snapshot.
+1. A creator submits a public video URL, an analytics screenshot or recording, and the Solana wallet to use for **that video**. PNG, JPEG, WebP, MP4, and WebM proof files are supported, up to 25 MiB. Proof goes directly into private Storage; the app server never receives a large multipart body.
+2. Vuze retrieves the video's view count from an independent provider. At or above the campaign minimum (default 1,000), the entry enters admin review; below the minimum, it stays out of review and can be checked again on the same entry after views grow. Missing permissions, unavailable metrics, timeouts, and exhausted API quotas create a recoverable verification hold, not a zero-view rejection.
+3. The admin reviews the video, uploaded analytics proof, verified count, eligibility, and the address saved on the submission. Approving the video automatically initiates its configured token payout; no second payout click is needed when the signer is ready. The address is immutable for that entry, and a creator may use a different wallet on another video.
+4. The isolated Turnkey signer accepts only allowlisted, capped Solana SPL `TransferChecked` transfers. Vuze records payment only after it verifies a finalized Solana mainnet transaction against the saved request. A video identity can be submitted once across campaigns and creators, and each submission can have only one direct payout request, preventing a second payout for the same post.
 
-The Friday-only second proof upload, new Friday batches, and manual “mark paid” write paths are retired. Existing batch tables and history remain for audit.
+The signer does not create recipient token accounts or pay account rent. The creator's wallet therefore needs an associated token account for the selected asset before approval, otherwise the signer safely blocks the transfer. Existing payout batches and history remain for audit; old batch reservations are not silently converted to direct payments.
 
 ## Local development and checks
 
-Use Node.js 24 or newer (the tests use native TypeScript support):
+Use Node.js 24 or newer:
 
 ```sh
 npm ci
@@ -22,85 +22,41 @@ npm run typecheck
 npm run dev
 ```
 
-`npm run build` compiles the app and runs database migrations if `DATABASE_URL` is configured. **Build is therefore a database-changing operation on a configured environment.** For compilation alone, use `npx vite build`. No external APIs, storage, or payments are simulated as successful in the app when their credentials are absent.
+`npm run build` compiles the app and runs database migrations if `DATABASE_URL` is configured; it is a database-changing operation on a configured environment. For compilation alone, use `npx vite build`. Without `DATABASE_URL`, the local PGLite database is in-memory and resets when the process restarts. It is a development preview only; live payouts refuse to run there.
 
-Without `DATABASE_URL`, the local PGLite database is in-memory and resets when the process restarts. It is a development preview only; live payouts refuse to run against it.
+The isolated signer package is in [`services/turnkey-signer`](services/turnkey-signer/README.md). Its local tests use fakes and do not call Turnkey or Solana RPC.
 
-## Configure Supabase
+## Supabase setup
 
-1. Choose a Supabase project. Put its server-side Postgres connection string in `DATABASE_URL`. For serverless hosting, use the Supabase transaction pooler connection string; this app uses parameterized, unnamed queries and connection-scoped transactions. Never expose this URL in browser code.
-2. Set `SUPABASE_URL` and the **server-only** `SUPABASE_SERVICE_ROLE_KEY`. These are used only by the proof storage server module. Browser uploads receive an exact-path signed upload URL, never the key.
-3. Run the app migrations in order: `npm run db:migrate`.
-4. In that project's SQL editor, run [`scripts/setup-supabase-storage.sql`](scripts/setup-supabase-storage.sql). It creates the private `analytics-proof` bucket, a 25 MiB limit, and allowed MIME types. If you use another bucket name, adjust both that script and `SUPABASE_ANALYTICS_BUCKET`.
-5. Set `BETTER_AUTH_URL` and a strong `BETTER_AUTH_SECRET`. Set Google/X OAuth variables if using those sign-in providers.
+1. Set the server-only Postgres connection string as `DATABASE_URL`. For serverless hosting, use Supabase's transaction pooler. Never expose this URL in browser code.
+2. Set `SUPABASE_URL` and the server-only `SUPABASE_SERVICE_ROLE_KEY` for private proof storage. Browser uploads receive an exact-path signed upload URL, never the service key.
+3. Run app migrations in order with `npm run db:migrate`, and run [`scripts/setup-supabase-storage.sql`](scripts/setup-supabase-storage.sql) in the project's SQL editor. It creates the private `analytics-proof` bucket, a 25 MiB limit, and allowed MIME types.
+4. Set `BETTER_AUTH_URL`, a strong `BETTER_AUTH_SECRET`, and any OAuth variables used for sign-in.
 
-Migration `0010` enables row-level security without browser policies on all app and Better Auth tables. Migration `0011` stores the exact pending wallet address, admin, and decision in an RLS-protected wallet-review audit table; a stale admin view cannot verify a replacement address. Authorization goes through the existing authenticated server functions using a privileged, server-only Postgres connection. Direct Supabase browser queries are intentionally denied. Proof reads require the creator's session or an admin session. **Do not add broad anon/authenticated table or storage policies.** Supabase Auth/JWT-based browser access would require a separate authorization redesign.
+Migration `0010` enables row-level security without browser policies on app and Better Auth tables. Direct Supabase browser queries are intentionally denied. Proof reads require the creator's session or an admin session; do not add broad anon/authenticated policies. On a fresh database, public signups are not automatically admins. Configure `ADMIN_USER_IDS` before the first profiles are created, or promote the intended existing profile using a privileged SQL session.
 
-On a fresh deployed database, the first public signup is **not** automatically admin. Configure `ADMIN_USER_IDS` before those users first create their profiles, or explicitly promote the intended existing profile through a privileged SQL session. Existing admin profiles are retained. The first local in-memory demo user can still be admin; live payments are disabled there.
+Migrations `0013` and `0014` add immutable per-submission wallet addresses and server-only Turnkey request records. Every new submission requires a valid Solana public key; the database rejects new rows without a wallet and blocks edits to the wallet after creation. Existing historical rows are retained without copying a profile wallet and cannot be approved for payout unless they have a valid destination.
 
-## Connect view verification
+## View verification
 
-For YouTube, set `YOUTUBE_DATA_API_KEY`. The server uses the official `videos.list` statistics endpoint for the exact video ID. Full TikTok `/@creator/video/…` links and Instagram Reel links are accepted; shortened TikTok redirects must be expanded by the creator.
+For YouTube, set `YOUTUBE_DATA_API_KEY`; the server calls the official `videos.list` statistics endpoint for the exact video ID. Full TikTok `/@creator/video/…` links and Instagram Reel links are accepted, but independent metrics for those services require creator-authorized account access. To support TikTok or Instagram, operate a trusted OAuth-backed analytics adapter and set `ANALYTICS_VERIFIER_URL` (HTTPS) and `ANALYTICS_VERIFIER_TOKEN`. The adapter must return independently fetched, fresh counts bound to the exact submitted identity; it must never echo creator-entered metrics.
 
-TikTok metrics require the creator's authorized account access; Instagram insights require authorized professional-account access. Neither arbitrary public links nor Supabase alone provide these permissions. To support those platforms, implement and operate a trusted analytics adapter with the necessary OAuth connections, then set `ANALYTICS_VERIFIER_URL` (HTTPS) and `ANALYTICS_VERIFIER_TOKEN`. No such external adapter or social-account connection UI is deployed by this change.
+Views do not establish ownership, audience quality, or organic traffic. Admins still review the actual video and the creator-provided analytics proof. The review queue refreshes every five seconds using polling, not WebSocket/Realtime.
 
-The app sends:
+## Solana payout setup
 
-```json
-{ "platform": "instagram", "videoId": "ReelCode", "postUrl": "https://www.instagram.com/reel/ReelCode/" }
-```
+Campaigns select from an explicit server-side allowlist of Solana SPL or extension-free Token-2022 mints. Rates are denominated in the configured token; Vuze does not convert tokens to USD. Verify every mint, decimal count, treasury, and campaign rate. Native SOL is not supported. A campaign's token cannot be changed after submissions exist.
 
-The adapter must return an independently fetched count bound to that exact identity:
+Payouts remain disabled until the Vuze app and the separate signer are both configured. The app requires `SOLANA_PAYOUTS_ENABLED=true`, a durable `DATABASE_URL`, an HTTPS `SOLANA_SIGNER_URL`, a bearer `SOLANA_SIGNER_TOKEN`, a unique `SOLANA_PAYOUT_NAMESPACE`, an HTTPS mainnet `SOLANA_RPC_URL`, and `SOLANA_PAYOUT_ASSETS`. The signer uses the same database, token, RPC URL, and asset list, plus Turnkey API credentials. See the [Turnkey signer deployment guide](services/turnkey-signer/README.md) for the environment variable list and run instructions.
 
-```json
-{ "platform": "instagram", "videoId": "ReelCode", "views": 1200, "source": "instagram-graph-api", "observedAt": "<current ISO-8601 timestamp>" }
-```
+Each `SOLANA_PAYOUT_ASSETS` JSON entry must have `symbol`, `mint`, `decimals`, `treasuryWallet`, `maxPayoutUnits`, and `maxDailyPayoutUnits`. Limits are positive integer strings in the token's smallest units; do not copy sample limits without choosing and reviewing appropriate amounts. The daily cap is reserved per treasury and mint by UTC day. The allowlist is capped at 50 unique mints. The signer checks the mainnet network, mint, decimals, treasury token account, destination token account, and balance before signing; Vuze independently validates the finalized transaction before recording payment.
 
-Evidence older than five minutes, missing counts, mismatched IDs, malformed counts, and provider failures are held for retry. Never implement this adapter by echoing creator-entered metrics. Provider quota and permissions must be monitored in the service that owns the adapter.
+The signer requires a Turnkey policy scoped to the intended treasury and token transfer. It builds one checked transfer, verifies Turnkey signed the exact original message, stores signed bytes before broadcasting, and only retries that same signature. Requests with changed payloads, unsupported Token-2022 extensions, missing token accounts, invalid configurations, or exceeded caps are rejected. Vuze validates the finalized transaction, treasury signature and source, recipient ownership, mint, and exact token-unit deltas before recording payment.
 
-## Configure Solana-token payouts safely
+A payout with an uncertain outcome stays `payment_processing`. Admin and creator detail views automatically reconcile an existing request, retrying only its immutable payload under the same idempotency key if the signer has no record; this cannot create a second transfer, even if new payouts are later disabled. A blocked signer request requires review; never delete or recreate a request with a new key, because this could bypass duplicate-payment protection. There is no live signer credential, deployment, treasury funding, or live payout in this repository change. Enabling automatic payouts is a separate operational step after review of Turnkey policies, deployment secrets, treasury funding, recipient token-account readiness, and caps.
 
-Campaigns select from an explicit server-side allowlist of Solana SPL or Token-2022 mints. Each campaign's rate is denominated in that token; the app does not convert different tokens to USD. Existing campaigns keep their USD1 mint and six-decimal denomination for continuity. Verify every mint, decimal count, and treasury before enabling payments. No treasury private key belongs in this app or in browser code.
+## Rollout
 
-Payments stay disabled until all of these are configured:
+Back up production and rehearse all migrations on Supabase staging. Migration `0008` moves legacy unpaid submissions onto a verification hold because their old view counts were self-reported; prior proof, review history, amounts, and payout history remain for audit. Creators must reverify before returning to review. Reserved batch items continue to block direct payment until an operator deliberately reconciles them.
 
-- `SOLANA_PAYOUTS_ENABLED=true`
-- A durable `DATABASE_URL`
-- `SOLANA_SIGNER_URL` (HTTPS), `SOLANA_SIGNER_TOKEN`, and `SOLANA_PAYOUT_NAMESPACE` (a stable, unique deployment name so staging and production cannot reuse payout keys)
-- `SOLANA_RPC_URL` (HTTPS, mainnet)
-- `SOLANA_PAYOUT_ASSETS`, a JSON array of allowlisted assets. Each object must contain `symbol`, `mint`, `decimals`, and `treasuryWallet` (a public key), for example:
-
-```json
-[
-  {
-    "symbol": "USD1",
-    "mint": "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB",
-    "decimals": 6,
-    "treasuryWallet": "<USD1 treasury public key>"
-  },
-  {
-    "symbol": "TOKEN",
-    "mint": "<verified Solana token mint>",
-    "decimals": 9,
-    "treasuryWallet": "<token treasury public key>"
-  }
-]
-```
-
-The allowlist is capped at 50 unique mints. The server verifies mint ownership and decimals against mainnet before creating a request; only legacy SPL Token and Token-2022 mints are supported (not native SOL). A campaign's token cannot be changed after submissions exist. Keep symbols descriptive, since they are display labels and do not identify the on-chain asset.
-
-The separately operated signer must expose:
-
-- `POST {SOLANA_SIGNER_URL}/payouts/{idempotencyKey}` with `{idempotencyKey,destination,treasuryWallet,mint,amountUnits,network}`. `treasuryWallet` is the asset-specific public key from the immutable request snapshot. Persist the key and immutable payload **before** broadcasting. A key can never authorize a second transfer or a changed payload.
-- `GET {SOLANA_SIGNER_URL}/payouts/{idempotencyKey}` to reconcile that same request.
-- Return `{ "signature": "<Solana transaction signature>" }` once the transaction exists. Pending/not-found responses must not cause another broadcast. Bearer authentication is required.
-
-The application verifies finalized mainnet transaction success, treasury signature and source, recipient ownership, mint, and exact token-unit deltas before recording payment. Creator wallets must be admin-verified, the account must not be suspended, and submissions must be API-verified, unflagged, and approved. Payment history records the chain signature.
-
-A persisted request with an uncertain outcome stays `payment_processing`. The open admin detail screen automatically reconciles existing requests every ten seconds without initiating another transfer; the payout list opens that detail screen after a pending payment. If the screen is closed, the request remains durable and reconciliation resumes on the next visit. Always-on reconciliation needs a separately deployed application worker; this change does not provision one. Admins can also use **Check payment**, or reconcile with the signer operator. Do not delete/recreate payout requests to “retry”; that could bypass duplicate-payment protection. This change defines the signer integration contract; it does not deploy or fund a treasury signer or demonstrate a live transfer.
-
-## Roll out carefully
-
-Back up production and rehearse migrations on a Supabase staging project first. Migration `0008` places existing unpaid review/approved submissions on a verification hold because their old counts were self-reported. Their previous amounts, proof links, review history, and payout history are retained. Creators upload upfront proof and reverify before re-entering review. Old batch reservations are preserved and block direct payment until an operator deliberately reconciles them; they are not silently converted or deleted.
-
-Migrations are additive and ordered, but the new review rules intentionally change eligibility. Validate real private uploads, provider credentials, creator/admin access separation, and signer reconciliation in staging before enabling production payments. Unit/database tests and a successful build are not evidence that a live Supabase project or mainnet transfer has been connected.
+Validate real private uploads, provider credentials, creator/admin separation, per-video wallet immutability, signer idempotency, cap enforcement, and reconciliation in staging before enabling production payments. A successful build and unit tests are not evidence that a live Supabase project or mainnet transfer is connected.

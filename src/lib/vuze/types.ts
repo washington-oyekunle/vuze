@@ -98,6 +98,7 @@ export type Submission = {
   creatorName: string;
   postUrl: string;
   platform: string;
+  payoutWalletAddress: string | null;
   notes: string;
   analyticsUrls: string;
   analyticsProofUrl: string;
